@@ -7,12 +7,14 @@ from .fargate_task_config import FargateTaskConfig
 @dataclass(frozen=True)
 class MailRelayConfig:
     port: int
+    iam_user_name: str
     secret_name: str
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
         return cls(
             port=data.get("port", 587),
+            iam_user_name=data["iam_user_name"],
             secret_name=data["secret_name"],
         )
 

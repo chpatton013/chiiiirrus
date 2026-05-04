@@ -158,7 +158,6 @@ def _write_secret_cmd(
     return cmd
 
 
-SES_SMTP_USER_NAME = "openclaw-mail-ses-smtp"
 SES_SMTP_VERSION = 0x04
 
 
@@ -237,18 +236,20 @@ def iam_user_exists(iam, name: str) -> bool:
         return False
 
 
-def bootstrap_ses_smtp_relay() -> tuple[str, str]:
+def bootstrap_ses_smtp_relay(iam_user_name: str) -> tuple[str, str]:
     """Create or reuse the SES SMTP IAM user, mint an access key, and
-    derive the SMTP password. Returns (access_key_id, smtp_password)."""
+    derive the SMTP password. Returns (access_key_id, smtp_password).
+
+    The IAM user name is operator-controlled via [mail.relay].iam_user_name."""
     region = boto3.Session().region_name or "us-west-2"
     iam = boto3.client("iam")
-    if not iam_user_exists(iam, SES_SMTP_USER_NAME):
-        iam.create_user(UserName=SES_SMTP_USER_NAME)
+    if not iam_user_exists(iam, iam_user_name):
+        iam.create_user(UserName=iam_user_name)
         iam.attach_user_policy(
-            UserName=SES_SMTP_USER_NAME,
+            UserName=iam_user_name,
             PolicyArn="arn:aws:iam::aws:policy/AmazonSESFullAccess",
         )
-    access_key = iam.create_access_key(UserName=SES_SMTP_USER_NAME)["AccessKey"]
+    access_key = iam.create_access_key(UserName=iam_user_name)["AccessKey"]
     smtp_password = derive_ses_smtp_password(access_key["SecretAccessKey"], region)
     return access_key["AccessKeyId"], smtp_password
 
@@ -591,10 +592,12 @@ def main() -> int:
         )
     # SES SMTP relay credentials. Creates an IAM user + access key,
     # derives the SES SMTP password, and stores both in the secret.
-    if needs_write("mail/ses-relay", existing):
-        access_key_id, smtp_password = bootstrap_ses_smtp_relay()
+    if needs_write(cfg.mail.relay.secret_name, existing):
+        access_key_id, smtp_password = bootstrap_ses_smtp_relay(
+            cfg.mail.relay.iam_user_name
+        )
         write_secret(
-            "mail/ses-relay",
+            cfg.mail.relay.secret_name,
             template={"username": access_key_id},
             key="password",
             provided=smtp_password,

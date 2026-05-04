@@ -302,10 +302,20 @@ class MailStack(Stack):
                 f'echo "$POSTMASTER_ADDRESS|{{SHA512-CRYPT}}$(openssl passwd -6 "$pm")" '
                 f"> {CONFIG_MOUNT}/postfix-accounts.cf"
             ),
-            # 3. mynetworks override so VPC traffic skips SASL on port 25
+            # 3a. mynetworks override so VPC traffic submits without SASL.
             (
                 f"printf 'mynetworks = 127.0.0.1/32 [::1]/128 %s\\n' \"$VPC_CIDR\" "
                 f"> {CONFIG_MOUNT}/postfix-main.cf"
+            ),
+            # 3b. master.cf override: re-add permit_mynetworks to the
+            # submission (587) service's recipient_restrictions so VPC
+            # clients can submit on 587 without SASL. Default DMS
+            # submission is permit_sasl_authenticated,reject -- which
+            # would otherwise reject our internal services.
+            (
+                "printf 'submission/inet/smtpd_recipient_restrictions="
+                "permit_mynetworks,permit_sasl_authenticated,reject\\n' "
+                f"> {CONFIG_MOUNT}/postfix-master.cf"
             ),
             # 4. Let's Encrypt cert (issue once, renew if <30 days from expiry).
             f'export LEGO_PATH="{LE_DIR}"',

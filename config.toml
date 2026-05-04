@@ -31,7 +31,7 @@ memory_limit_mib = 2048
 
 [authentik.smtp]
 host = "smtp.chiiiirs.com"
-port = 25
+port = 587
 from_email_address = "authentik@chiiiirs.com"
 
 [authentik.user]
@@ -80,7 +80,7 @@ memory_limit_mib = 1024
 
 [vaultwarden.smtp]
 host = "smtp.chiiiirs.com"
-port = 25
+port = 587
 from_email_address = "vaultwarden@chiiiirs.com"
 
 [mail]
@@ -98,6 +98,7 @@ min_healthy_percent = 0
 
 [mail.relay]
 port = 587
+iam_user_name = "chiiiirs-dot-com-mail-ses"
 secret_name = "mail/ses-relay"
 # `host` is intentionally omitted; MailStack derives it from Aws.REGION
 # as f"email-smtp.{Aws.REGION}.amazonaws.com" so it tracks the deploy
