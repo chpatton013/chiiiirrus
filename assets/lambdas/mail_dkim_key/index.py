@@ -54,6 +54,20 @@ def _generate_pem() -> str:
 
 
 def _public_key_txt(pem: str) -> str:
+    """Return the DKIM TXT record value already split into <=255-char
+    quoted character-strings.
+
+    Route53 (and DNS in general) limits a single TXT character-string to
+    255 bytes; an RSA-2048 DKIM record is ~410 bytes and needs to be
+    represented as multiple concatenated quoted strings, e.g.
+    ``"v=DKIM1; k=rsa; p=AAA..." "BBB..."``. Resolvers concatenate the
+    quoted strings to reconstruct the logical record value.
+
+    CDK's `TxtRecord` would auto-split a compile-time string, but the
+    return value flows through a Custom Resource Data attribute (a CFN
+    Token), which CDK can't introspect at synth time. So we pre-split
+    here and feed the result into `route53.CfnRecordSet` verbatim.
+    """
     private_key = serialization.load_pem_private_key(pem.encode("ascii"), password=None)
     public_key = private_key.public_key()
     der = public_key.public_bytes(
@@ -61,7 +75,9 @@ def _public_key_txt(pem: str) -> str:
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
     b64 = base64.b64encode(der).decode("ascii")
-    return f"v=DKIM1; k=rsa; p={b64}"
+    payload = f"v=DKIM1; k=rsa; p={b64}"
+    chunks = [payload[i : i + 255] for i in range(0, len(payload), 255)]
+    return " ".join(f'"{c}"' for c in chunks)
 
 
 def handler(event, _ctx):

@@ -146,9 +146,17 @@ class MailStack(Stack):
         ###
         # Static EIPs (one per AZ) so the public hostname (and PTR if
         # ever set up) doesn't churn.
+        #
+        # RemovalPolicy.RETAIN: CFN's EIP delete during rollback has
+        # hit `InvalidCredentials` reliably across two attempts (a
+        # known transient class of error). RETAIN keeps the EIPs so a
+        # rollback can complete cleanly; on real teardown they're
+        # released manually.
 
         eip1 = ec2.CfnEIP(self, "MailEip1", domain="vpc")
         eip2 = ec2.CfnEIP(self, "MailEip2", domain="vpc")
+        eip1.apply_removal_policy(RemovalPolicy.RETAIN)
+        eip2.apply_removal_policy(RemovalPolicy.RETAIN)
 
         ###
         # NLB + Fargate service.
@@ -518,10 +526,18 @@ class MailStack(Stack):
                 f"ruf=mailto:{cfg.postmaster_address}; fo=1"
             ],
         )
-        route53.TxtRecord(
+        # CfnRecordSet (L1) instead of TxtRecord (L2): the DKIM payload
+        # is a CFN Token and exceeds 255 bytes. The Lambda returns it
+        # pre-split into quoted character-strings; CfnRecordSet passes
+        # them to Route53 verbatim, while TxtRecord would re-wrap the
+        # whole thing in another set of quotes and trip the
+        # CharacterStringTooLong check.
+        route53.CfnRecordSet(
             self,
             "MailDkim",
-            zone=foundation.public_zone,
-            record_name=f"{DKIM_SELECTOR}._domainkey",
-            values=[dkim_resource.get_att_string("PublicKeyTxt")],
+            hosted_zone_id=foundation.public_zone.hosted_zone_id,
+            name=f"{DKIM_SELECTOR}._domainkey.{foundation.public_domain}.",
+            type="TXT",
+            ttl="1800",
+            resource_records=[dkim_resource.get_att_string("PublicKeyTxt")],
         )
