@@ -64,6 +64,9 @@ class TestSynth(unittest.TestCase):
     def test_vaultwarden_stack(self) -> None:
         self.assertIn("Resources", self._template("VaultwardenStack"))
 
+    def test_mail_stack(self) -> None:
+        self.assertIn("Resources", self._template("MailStack"))
+
     def test_openclaw_stack(self) -> None:
         self.assertIn("Resources", self._template("OpenClawStack"))
 

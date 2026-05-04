@@ -6,6 +6,7 @@ from .stacks.authentik_stack import AuthentikImports, AuthentikStack
 from .stacks.data_stack import DataImports, DataStack
 from .stacks.foundation_stack import FoundationImports, FoundationStack
 from .stacks.headscale_stack import HeadscaleImports, HeadscaleStack
+from .stacks.mail_stack import MailImports, MailStack
 from .stacks.openclaw_stack import OpenClawStack
 from .stacks.vaultwarden_stack import VaultwardenImports, VaultwardenStack
 from .stacks.webfinger_stack import WebFingerImports, WebFingerStack
@@ -91,6 +92,16 @@ def build_app(
             foundation=foundation,
             data=data,
             authentik_issuer_base=authentik_issuer_base,
+        ),
+        env=env,
+    )
+    MailStack(
+        app,
+        "MailStack",
+        imports=MailImports(
+            cfg=cfg.mail,
+            foundation=foundation,
+            assets=assets,
         ),
         env=env,
     )

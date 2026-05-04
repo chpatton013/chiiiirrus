@@ -7,6 +7,7 @@ from .authentik_config import AuthentikConfig
 from .data_config import DataConfig
 from .foundation_config import FoundationConfig
 from .headscale_config import HeadscaleConfig
+from .mail_config import MailConfig
 from .vaultwarden_config import VaultwardenConfig
 from .webfinger_config import WebFingerConfig
 
@@ -19,6 +20,7 @@ class AppConfig:
     webfinger: WebFingerConfig
     headscale: HeadscaleConfig
     vaultwarden: VaultwardenConfig
+    mail: MailConfig
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
@@ -29,6 +31,7 @@ class AppConfig:
             webfinger=WebFingerConfig.load(data["webfinger"]),
             headscale=HeadscaleConfig.load(data["headscale"]),
             vaultwarden=VaultwardenConfig.load(data["vaultwarden"]),
+            mail=MailConfig.load(data["mail"]),
         )
 
 

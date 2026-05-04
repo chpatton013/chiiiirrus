@@ -1,5 +1,8 @@
 import argparse
+import base64
 import getpass
+import hashlib
+import hmac
 import json
 import pathlib
 import secrets
@@ -155,6 +158,133 @@ def _write_secret_cmd(
     return cmd
 
 
+SES_SMTP_USER_NAME = "openclaw-mail-ses-smtp"
+SES_SMTP_VERSION = 0x04
+
+
+def derive_ses_smtp_password(secret_access_key: str, region: str) -> str:
+    """Derive an SES SMTP password from an IAM secret access key.
+
+    Implements the documented HMAC-SHA256 algorithm:
+    https://docs.aws.amazon.com/ses/latest/dg/smtp-credentials.html#smtp-credentials-convert
+    """
+
+    def _sign(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    signature = _sign(("AWS4" + secret_access_key).encode("utf-8"), "11111111")
+    signature = _sign(signature, region)
+    signature = _sign(signature, "ses")
+    signature = _sign(signature, "aws4_request")
+    signature = _sign(signature, "SendRawEmail")
+    return base64.b64encode(bytes([SES_SMTP_VERSION]) + signature).decode("ascii")
+
+
+def find_hosted_zone_id(domain: str) -> str:
+    r53 = boto3.client("route53")
+    paginator = r53.get_paginator("list_hosted_zones_by_name")
+    target = domain.rstrip(".") + "."
+    for page in paginator.paginate():
+        for zone in page.get("HostedZones", []):
+            if zone["Name"] == target and not zone["Config"].get("PrivateZone"):
+                return zone["Id"].split("/")[-1]
+    raise RuntimeError(f"public hosted zone not found for domain {domain!r}")
+
+
+def upsert_route53_record(
+    zone_id: str, name: str, type_: str, values: list[str], ttl: int
+) -> None:
+    r53 = boto3.client("route53")
+    r53.change_resource_record_sets(
+        HostedZoneId=zone_id,
+        ChangeBatch={
+            "Changes": [
+                {
+                    "Action": "UPSERT",
+                    "ResourceRecordSet": {
+                        "Name": name.rstrip(".") + ".",
+                        "Type": type_,
+                        "TTL": ttl,
+                        "ResourceRecords": [{"Value": v} for v in values],
+                    },
+                }
+            ]
+        },
+    )
+
+
+def domain_ses_verified(ses, domain: str) -> bool:
+    response = ses.get_identity_verification_attributes(Identities=[domain])
+    status = (
+        response.get("VerificationAttributes", {})
+        .get(domain, {})
+        .get("VerificationStatus")
+    )
+    return status in ("Pending", "Success")
+
+
+def domain_ses_dkim_enabled(ses, domain: str) -> bool:
+    response = ses.get_identity_dkim_attributes(Identities=[domain])
+    attrs = response.get("DkimAttributes", {}).get(domain, {})
+    return bool(attrs.get("DkimEnabled")) and bool(attrs.get("DkimTokens"))
+
+
+def iam_user_exists(iam, name: str) -> bool:
+    try:
+        iam.get_user(UserName=name)
+        return True
+    except iam.exceptions.NoSuchEntityException:
+        return False
+
+
+def bootstrap_ses_smtp_relay() -> tuple[str, str]:
+    """Create or reuse the SES SMTP IAM user, mint an access key, and
+    derive the SMTP password. Returns (access_key_id, smtp_password)."""
+    region = boto3.Session().region_name or "us-west-2"
+    iam = boto3.client("iam")
+    if not iam_user_exists(iam, SES_SMTP_USER_NAME):
+        iam.create_user(UserName=SES_SMTP_USER_NAME)
+        iam.attach_user_policy(
+            UserName=SES_SMTP_USER_NAME,
+            PolicyArn="arn:aws:iam::aws:policy/AmazonSESFullAccess",
+        )
+    access_key = iam.create_access_key(UserName=SES_SMTP_USER_NAME)["AccessKey"]
+    smtp_password = derive_ses_smtp_password(access_key["SecretAccessKey"], region)
+    return access_key["AccessKeyId"], smtp_password
+
+
+def bootstrap_ses_domain(public_domain: str) -> None:
+    """Verify the public domain in SES (incl. DKIM) and publish the
+    required Route53 TXT/CNAMEs. Idempotent."""
+    ses = boto3.client("ses")
+    zone_id = find_hosted_zone_id(public_domain)
+    if not domain_ses_verified(ses, public_domain):
+        token = ses.verify_domain_identity(Domain=public_domain)["VerificationToken"]
+        upsert_route53_record(
+            zone_id,
+            f"_amazonses.{public_domain}",
+            "TXT",
+            [f'"{token}"'],
+            1800,
+        )
+        print(f"SES domain verification record published for {public_domain}")
+    else:
+        print(f"SES domain {public_domain!r} already verified; skipping")
+    if not domain_ses_dkim_enabled(ses, public_domain):
+        tokens = ses.verify_domain_dkim(Domain=public_domain)["DkimTokens"]
+        for token in tokens:
+            upsert_route53_record(
+                zone_id,
+                f"{token}._domainkey.{public_domain}",
+                "CNAME",
+                [f"{token}.dkim.amazonses.com"],
+                1800,
+            )
+        print(f"SES DKIM CNAMEs ({len(tokens)}) published for {public_domain}")
+    else:
+        print(f"SES DKIM for {public_domain!r} already enabled; skipping")
+
+
 def write_secret(
     name: str,
     *,
@@ -226,6 +356,7 @@ def main() -> int:
     parser.add_argument("--vaultwarden-oidc-client-secret")
     parser.add_argument("--vaultwarden-smtp-username")
     parser.add_argument("--vaultwarden-smtp-password")
+    parser.add_argument("--mail-postmaster-password")
     args = parser.parse_args()
 
     cfg = load_config(CONFIG_PATH)
@@ -438,6 +569,49 @@ def main() -> int:
             length=32,
             exclude_punctuation=True,
         )
+
+    # MailStack: postmaster mailbox password (used by the init container to
+    # populate /tmp/docker-mailserver/postfix-accounts.cf on every task start).
+    if needs_write("mail/postmaster-password", existing):
+        write_secret(
+            "mail/postmaster-password",
+            template={},
+            key="secret",
+            provided=resolve_optional_password(
+                args, "mail_postmaster_password", "Mail postmaster password"
+            ),
+            length=32,
+            exclude_punctuation=True,
+        )
+    # Placeholder - the MailStack DKIM Custom Resource Lambda generates
+    # the keypair on first deploy and rotates this in-place.
+    if needs_write("mail/dkim-private-key", existing):
+        write_secret(
+            "mail/dkim-private-key", template={}, key="secret", provided="pending"
+        )
+    # SES SMTP relay credentials. Creates an IAM user + access key,
+    # derives the SES SMTP password, and stores both in the secret.
+    if needs_write("mail/ses-relay", existing):
+        access_key_id, smtp_password = bootstrap_ses_smtp_relay()
+        write_secret(
+            "mail/ses-relay",
+            template={"username": access_key_id},
+            key="password",
+            provided=smtp_password,
+        )
+
+    # MailStack SES domain setup: verify the public domain + publish DKIM CNAMEs.
+    bootstrap_ses_domain(cfg.foundation.public_domain)
+
+    print()
+    print("=" * 60)
+    print("Bootstrap complete. Manual steps that AWS does not allow scripting:")
+    print("  - Move SES out of sandbox: AWS Support -> Service Quota Increase ->")
+    print("    SES -> 'Production Access'. Required for sending to non-verified")
+    print("    addresses.")
+    print("  - (Optional) Reverse DNS (PTR) on the mail server EIPs after")
+    print("    MailStack deploys: AWS Support case 'Reverse DNS for EIP'.")
+    print("=" * 60)
 
     return 0
 

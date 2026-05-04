@@ -70,11 +70,11 @@ running with any concurrency.
 
 ## Post-Deploy Setup
 
-The Tailscale, Headscale, and Headplane OIDC applications, users, and group
-memberships are provisioned automatically by Authentik blueprints in
-[`assets/authentik/blueprints/`](./assets/authentik/blueprints/), synced to
-each Authentik task from S3 by an init container on every deploy. The only
-remaining manual step is the Tailscale SaaS-side registration.
+The Tailscale, Headscale, Headplane, and Vaultwarden OIDC applications, users,
+and group memberships are provisioned automatically by Authentik blueprints in
+[`assets/authentik/blueprints/`](./assets/authentik/blueprints/), synced to each
+Authentik task from S3 by an init container on every deploy. The only remaining
+manual step is the Tailscale SaaS-side registration.
 
 - Tailscale (SaaS-side)
     - Create a new account with OIDC provider
@@ -97,6 +97,8 @@ remaining manual step is the Tailscale SaaS-side registration.
           --secret-id headscale/admin-api-key \
           --query SecretString --output text | jq -r .secret
       ```
+- Vaultwarden
+    - Log in at `https://vaultwarden.<public_domain>` using your SSO identity.
 - Domain registrars
     - After the hosted zone are created, copy the 4 NS records from Route53 into
     the registrar DNS config.
@@ -179,6 +181,22 @@ script for each step, or take matters into your own hands.
         - `bin/aws-write-secret vaultwarden/database --template='{"username":"vaultwarden"}' --key=password --length=32 --exclude-punctuation`
         - `bin/aws-write-secret vaultwarden/admin-token --template='{}' --key=secret --length=64 --exclude-punctuation`
         - `bin/aws-write-secret vaultwarden/smtp --template='{"username":"USERNAME"}' --key=password`
+        - `bin/aws-write-secret mail/postmaster-password --template='{}' --key=secret --length=32 --exclude-punctuation`
+        - `echo -n pending | bin/aws-write-secret mail/dkim-private-key --template='{}' --key=secret -  # sentinel placeholder; the MailStack DKIM Custom Resource replaces it on first deploy`
+        - `mail/ses-relay`: create an IAM user with `AmazonSESFullAccess`,
+          mint an access key, and derive the SES SMTP password (see
+          `derive_ses_smtp_password` in `scripts/bootstrap/aws_resources.py`).
+          Stored as `{"username":"AKIA...","password":"<derived>"}`.
+4. SES domain setup (also handled automatically by `bin/bootstrap`):
+    - `aws ses verify-domain-identity --domain DOMAIN`
+      (publish the returned token at `_amazonses.DOMAIN` as a TXT record)
+    - `aws ses verify-domain-dkim --domain DOMAIN`
+      (publish each of the three returned tokens as
+      `<token>._domainkey.DOMAIN` CNAME records pointing to
+      `<token>.dkim.amazonses.com`)
+    - SES production access (manual support ticket): "Service Quota Increase
+      → SES → Production Access". Without it, SES only delivers to verified
+      addresses.
 
 ## Secrets Format Convention
 
