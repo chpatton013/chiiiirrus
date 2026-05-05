@@ -1,0 +1,42 @@
+version: 1
+metadata:
+  name: Roundcube webmail OIDC application
+entries:
+  - model: authentik_core.group
+    identifiers:
+      name: roundcube
+    attrs:
+      users:
+        - !Find [authentik_core.user, [username, !Env AK_BP_USER_USERNAME]]
+  - model: authentik_providers_oauth2.oauth2provider
+    id: roundcube-provider
+    identifiers:
+      name: roundcube
+    attrs:
+      client_type: confidential
+      client_id: !Env AK_BP_ROUNDCUBE_CLIENT_ID
+      client_secret: !Env AK_BP_ROUNDCUBE_CLIENT_SECRET
+      redirect_uris:
+        - matching_mode: strict
+          url: !Env AK_BP_ROUNDCUBE_REDIRECT_URI
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+  - model: authentik_core.application
+    identifiers:
+      slug: roundcube
+    attrs:
+      name: Roundcube
+      provider: !KeyOf roundcube-provider
+      policy_engine_mode: any
+      open_in_new_tab: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !Find [authentik_core.application, [slug, roundcube]]
+      group: !Find [authentik_core.group, [name, roundcube]]
+    attrs:
+      order: 0

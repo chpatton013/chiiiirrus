@@ -7,10 +7,11 @@ from .stacks.data_stack import DataImports, DataStack
 from .stacks.foundation_stack import FoundationImports, FoundationStack
 from .stacks.headscale_stack import HeadscaleImports, HeadscaleStack
 from .stacks.mail_stack import MailImports, MailStack
-from .stacks.openclaw_stack import OpenClawStack
+from .stacks.openclaw_stack import OpenClawImports, OpenClawStack
 from .stacks.site_stack import SiteImports, SiteStack
 from .stacks.vaultwarden_stack import VaultwardenImports, VaultwardenStack
 from .stacks.webfinger_stack import WebFingerImports, WebFingerStack
+from .stacks.webmail_stack import WebmailImports, WebmailStack
 
 
 def build_app(
@@ -28,6 +29,11 @@ def build_app(
         f"{cfg.headscale.headplane_subdomain}.{cfg.foundation.public_domain}"
     )
     vaultwarden_fqdn = f"{cfg.vaultwarden.subdomain}.{cfg.foundation.public_domain}"
+    rspamd_fqdn = f"rspamd.{cfg.foundation.public_domain}"
+    rspamd_redirect_uri = f"https://{rspamd_fqdn}/oauth2/idpresponse"
+    mail_fqdn = f"{cfg.mail.subdomain}.{cfg.foundation.public_domain}"
+    roundcube_fqdn = f"{cfg.webmail.subdomain}.{cfg.foundation.public_domain}"
+    roundcube_redirect_uri = f"https://{roundcube_fqdn}/oauth2/idpresponse"
 
     # CloudFront / ACM-for-CloudFront only live in us-east-1, so SiteStack
     # is pinned there. Everything else stays in the app's primary region;
@@ -65,6 +71,8 @@ def build_app(
             headplane_redirect_uri=f"https://{headplane_fqdn}/admin/oidc/callback",
             headplane_launch_url=f"https://{headplane_fqdn}/admin",
             vaultwarden_redirect_uri=f"https://{vaultwarden_fqdn}/identity/connect/oidc-signin",
+            rspamd_redirect_uri=rspamd_redirect_uri,
+            roundcube_redirect_uri=roundcube_redirect_uri,
         ),
         env=env,
     )
@@ -103,13 +111,28 @@ def build_app(
         ),
         env=env,
     )
-    MailStack(
+    mail = MailStack(
         app,
         "MailStack",
         imports=MailImports(
             cfg=cfg.mail,
             foundation=foundation,
             assets=assets,
+            authentik_issuer_base=authentik_issuer_base,
+            rspamd_redirect_uri=rspamd_redirect_uri,
+        ),
+        env=env,
+    ).exports
+    WebmailStack(
+        app,
+        "WebmailStack",
+        imports=WebmailImports(
+            cfg=cfg.webmail,
+            foundation=foundation,
+            mail=mail,
+            mail_fqdn=mail_fqdn,
+            authentik_issuer_base=authentik_issuer_base,
+            roundcube_redirect_uri=roundcube_redirect_uri,
         ),
         env=env,
     )
@@ -125,4 +148,9 @@ def build_app(
         env=site_env,
         cross_region_references=True,
     )
-    OpenClawStack(app, "OpenClawStack", env=env)
+    OpenClawStack(
+        app,
+        "OpenClawStack",
+        imports=OpenClawImports(foundation=foundation),
+        env=env,
+    )

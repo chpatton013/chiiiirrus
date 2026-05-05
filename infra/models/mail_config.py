@@ -28,6 +28,7 @@ class MailConfig:
     relay: MailRelayConfig
     enable_smtps: bool
     enable_clamav: bool
+    users: tuple[str, ...]
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
@@ -39,4 +40,5 @@ class MailConfig:
             relay=MailRelayConfig.load(data["relay"]),
             enable_smtps=bool(data.get("enable_smtps", False)),
             enable_clamav=bool(data.get("enable_clamav", True)),
+            users=tuple(data.get("users", ())),
         )

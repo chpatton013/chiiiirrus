@@ -1,4 +1,5 @@
 import pathlib
+from dataclasses import dataclass
 
 from aws_cdk import (
     CfnOutput,
@@ -14,6 +15,14 @@ from aws_cdk import (
     aws_iam as iam,
 )
 from constructs import Construct
+
+from ..models.foundation_exports import FoundationExports
+
+
+@dataclass(frozen=True)
+class OpenClawImports:
+    foundation: FoundationExports
+
 
 EFS_MOUNTPOINT_DIR = pathlib.Path("/data")
 OPENCLAW_ROOT_DIR = EFS_MOUNTPOINT_DIR / "openclaw"
@@ -54,9 +63,17 @@ def parse_bool(s: str) -> bool:
 
 
 class OpenClawStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        imports: OpenClawImports,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        foundation = imports.foundation
         user_data_replace = parse_bool(
             self.node.try_get_context("userDataReplace") or "false"
         )
@@ -259,6 +276,7 @@ class OpenClawStack(Stack):
             self,
             "OpenClawBackupPlan",
             backup_plan_name="openclaw-efs-backups",
+            backup_vault=foundation.backup_vault,
         )
 
         backup_plan.add_rule(

@@ -217,12 +217,17 @@ script for each step, or take matters into your own hands.
           (same shape as headscale)
         - `bin/aws-write-secret authentik/oidc/vaultwarden -`
           (same shape as headscale)
+        - `bin/aws-write-secret authentik/oidc/rspamd -`
+          (same shape as headscale; consumed by the MailStack internal ALB to gate the rspamd web UI)
+        - `bin/aws-write-secret authentik/oidc/roundcube -`
+          (same shape as headscale; consumed by the WebmailStack public ALB to gate Roundcube)
         - `bin/aws-write-secret headscale/noise-private-key --template='{}' --key=secret --bytes=32`
         - `bin/aws-write-secret headplane/cookie-secret --template='{}' --key=secret --bytes=32`
         - `echo -n pending | bin/aws-write-secret headscale/admin-api-key --template='{}' --key=secret -  # sentinel placeholder; replaced by HeadscaleStack`
         - `bin/aws-write-secret vaultwarden/database --template='{"username":"vaultwarden"}' --key=password --length=32 --exclude-punctuation`
         - `bin/aws-write-secret vaultwarden/admin-token --template='{}' --key=secret --length=64 --exclude-punctuation`
         - `bin/aws-write-secret mail/postmaster-password --template='{}' --key=secret --length=32 --exclude-punctuation`
+        - `bin/aws-write-secret mail/users/USERNAME --template='{}' --key=secret --length=32 --exclude-punctuation  # one per `[mail].users` entry; init container reads `mail/users/<name>` at boot`
         - `echo -n pending | bin/aws-write-secret mail/dkim-private-key --template='{}' --key=secret -  # sentinel placeholder; the MailStack DKIM Custom Resource replaces it on first deploy`
         - `mail/ses-relay` is a multi-step setup, so it has no single
           `aws-write-secret` line. The manual equivalent of what
@@ -395,20 +400,33 @@ DAG. But they can never declare a cyclical dependency.
         - Services: single Fargate task at `smtp.<public_domain>` with
           ports 25 / 465 / 587 / 143 / 993 fronted by a public NLB
         - Storage: encrypted EFS with three access points
-          (`mail`, `config`, `clamav`)
-        - Init container (one task, four jobs, each idempotent):
+          (`mail`, `config`, `clamav`); daily/weekly snapshots into
+          the `openclaw-backups` `BackupVault` from FoundationStack
+        - Init container (one task, several jobs, each idempotent):
             1. fetches the DKIM private key from
                `mail/dkim-private-key` onto EFS at the rspamd-expected
                path (`rspamd/dkim/s1.key`),
-            2. hashes `mail/postmaster-password` and writes
-               `postfix-accounts.cf` for the postmaster mailbox,
+            2. hashes `mail/postmaster-password` plus each
+               `mail/users/<name>` secret and writes them to
+               `postfix-accounts.cf` (one row per `[mail].users` entry
+               plus postmaster),
             3. writes a `postfix-main.cf` override adding the VPC CIDR
-               to `mynetworks` and a `postfix-master.cf` override that
+               to `mynetworks`, a `postfix-master.cf` override that
                re-adds `permit_mynetworks` to the submission service so
                in-VPC clients (Authentik, Vaultwarden) submit on 587
-               without SASL,
+               without SASL, and a rspamd
+               `worker-controller.inc` override that binds the rspamd
+               web UI to `0.0.0.0:11334` and skips its built-in auth
+               for VPC traffic (the internal ALB's Authentik OIDC
+               action is the gate),
             4. issues / renews the Let's Encrypt cert via DNS-01 against
                Route53 using `lego` (renew if <30 days from expiry)
+        - Rspamd web UI: internal ALB at `rspamd.<public_domain>`
+          (private IP, public DNS so Tailscale clients can resolve it
+          via Headscale's exit-node tunnel). HTTPS listener fronts the
+          mail task's port 11334 behind an Authentik-OIDC action.
+          Members of the `rspamd` Authentik group can review the spam
+          quarantine and rspamd stats.
         - DKIM: a Custom Resource Lambda generates an RSA-2048 keypair
           on first deploy, stores the private key in
           `mail/dkim-private-key`, and emits the public key as a Route53
@@ -486,6 +504,20 @@ DAG. But they can never declare a cyclical dependency.
         - Services: single Fargate task (`vaultwarden/server`) pulled from
           the Docker Hub pull-through cache
         - Network: public ALB at `vaultwarden.<public_domain>`
+- [Webmail Stack](./infra/stacks/webmail_stack.py)
+    - Roundcube webmail at `mail.<public_domain>`.
+    - Resources:
+        - Services: single Fargate task (`roundcube/roundcubemail`)
+          pulled from the Docker Hub pull-through cache, talking to
+          MailStack on IMAPS:993 + STARTTLS:587 via the public NLB
+        - Storage: a `RoundcubeAp` access point on the existing
+          MailStack EFS, mounted at `/var/roundcube` for sqlite +
+          config (covered by the same backup plan as the rest of the
+          mail volume)
+        - Network: public ALB with an Authentik-OIDC action gating
+          all traffic; after SSO, the user signs into Roundcube with
+          their IMAP password (`mail/users/<name>`). Two-step today;
+          collapsing it into a single-step SSO is a tracked follow-up.
 - Planned public AWS stacks:
     - Matrix Synapse
 - Planned private AWS stacks:

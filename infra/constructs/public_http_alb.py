@@ -22,6 +22,7 @@ class PublicHttpAlb(Construct):
         zone: route53.IHostedZone,
         vpc: ec2.IVpc,
         additional_fqdns: Sequence[str] = (),
+        internet_facing: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -29,18 +30,21 @@ class PublicHttpAlb(Construct):
         self.security_group = ec2.SecurityGroup(
             self, "SecurityGroup", vpc=vpc, allow_all_outbound=True
         )
-        self.security_group.add_ingress_rule(
-            ec2.Peer.any_ipv4(), ec2.Port.tcp(443), "HTTPS"
+        ingress_peer = (
+            ec2.Peer.any_ipv4()
+            if internet_facing
+            else ec2.Peer.ipv4(vpc.vpc_cidr_block)
         )
+        self.security_group.add_ingress_rule(ingress_peer, ec2.Port.tcp(443), "HTTPS")
         self.security_group.add_ingress_rule(
-            ec2.Peer.any_ipv4(), ec2.Port.tcp(80), "HTTP redirect"
+            ingress_peer, ec2.Port.tcp(80), "HTTP redirect"
         )
 
         self.alb = elbv2.ApplicationLoadBalancer(
             self,
             "Alb",
             vpc=vpc,
-            internet_facing=True,
+            internet_facing=internet_facing,
             security_group=self.security_group,
         )
 

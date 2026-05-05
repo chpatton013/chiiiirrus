@@ -11,6 +11,7 @@ from .mail_config import MailConfig
 from .site_config import SiteConfig
 from .vaultwarden_config import VaultwardenConfig
 from .webfinger_config import WebFingerConfig
+from .webmail_config import WebmailConfig
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class AppConfig:
     vaultwarden: VaultwardenConfig
     mail: MailConfig
     site: SiteConfig
+    webmail: WebmailConfig
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
@@ -35,6 +37,7 @@ class AppConfig:
             vaultwarden=VaultwardenConfig.load(data["vaultwarden"]),
             mail=MailConfig.load(data["mail"]),
             site=SiteConfig.load(data["site"]),
+            webmail=WebmailConfig.load(data["webmail"]),
         )
 
 

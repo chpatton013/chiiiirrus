@@ -384,6 +384,10 @@ def main() -> int:
     parser.add_argument("--vaultwarden-admin-token")
     parser.add_argument("--vaultwarden-oidc-client-id")
     parser.add_argument("--vaultwarden-oidc-client-secret")
+    parser.add_argument("--rspamd-oidc-client-id")
+    parser.add_argument("--rspamd-oidc-client-secret")
+    parser.add_argument("--roundcube-oidc-client-id")
+    parser.add_argument("--roundcube-oidc-client-secret")
     parser.add_argument("--mail-postmaster-password")
     args = parser.parse_args()
 
@@ -512,7 +516,7 @@ def main() -> int:
             ),
         )
 
-    for slug in ("headscale", "headplane", "vaultwarden"):
+    for slug in ("headscale", "headplane", "vaultwarden", "rspamd", "roundcube"):
         name = f"authentik/oidc/{slug}"
         if needs_write(name, existing):
             write_secret(
@@ -580,6 +584,19 @@ def main() -> int:
             length=32,
             exclude_punctuation=True,
         )
+    # MailStack: per-user mailbox passwords (one per `[mail].users` entry).
+    # The init container reads each via `mail/users/<name>` and appends a
+    # row to postfix-accounts.cf at boot.
+    for user in cfg.mail.users:
+        secret_name = f"mail/users/{user}"
+        if needs_write(secret_name, existing):
+            write_secret(
+                secret_name,
+                template={},
+                key="secret",
+                length=32,
+                exclude_punctuation=True,
+            )
     # Placeholder - the MailStack DKIM Custom Resource Lambda generates
     # the keypair on first deploy and rotates this in-place.
     if needs_write("mail/dkim-private-key", existing):

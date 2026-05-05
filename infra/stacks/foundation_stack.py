@@ -2,7 +2,9 @@ from dataclasses import dataclass
 
 from aws_cdk import (
     Aws,
+    RemovalPolicy,
     Stack,
+    aws_backup as backup,
     aws_ec2 as ec2,
     aws_ecr as ecr,
     aws_ecs as ecs,
@@ -107,6 +109,13 @@ class FoundationStack(Stack):
             f"{DOCKERHUB_MIRROR_NAMESPACE}"
         )
 
+        backup_vault = backup.BackupVault(
+            self,
+            "BackupVault",
+            backup_vault_name="openclaw-backups",
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+
         self.exports = FoundationExports(
             public_domain=cfg.public_domain,
             public_zone=public_zone,
@@ -118,4 +127,5 @@ class FoundationStack(Stack):
             ghcr_mirror_namespace=GHCR_MIRROR_NAMESPACE,
             dockerhub_mirror_base=dockerhub_mirror_base,
             dockerhub_mirror_namespace=DOCKERHUB_MIRROR_NAMESPACE,
+            backup_vault=backup_vault,
         )

@@ -35,6 +35,8 @@ class AuthentikImports:
     headplane_redirect_uri: str
     headplane_launch_url: str
     vaultwarden_redirect_uri: str
+    rspamd_redirect_uri: str
+    roundcube_redirect_uri: str
 
 
 AUTHENTIK_HTTP_PORT = 9000
@@ -86,6 +88,12 @@ class AuthentikStack(Stack):
         )
         vaultwarden_oidc_secret = secretsmanager.Secret.from_secret_name_v2(
             self, "VaultwardenOidcSecret", "authentik/oidc/vaultwarden"
+        )
+        rspamd_oidc_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "RspamdOidcSecret", "authentik/oidc/rspamd"
+        )
+        roundcube_oidc_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "RoundcubeOidcSecret", "authentik/oidc/roundcube"
         )
 
         ###
@@ -149,6 +157,8 @@ class AuthentikStack(Stack):
             "AK_BP_HEADPLANE_REDIRECT_URI": imports.headplane_redirect_uri,
             "AK_BP_HEADPLANE_LAUNCH_URL": imports.headplane_launch_url,
             "AK_BP_VAULTWARDEN_REDIRECT_URI": imports.vaultwarden_redirect_uri,
+            "AK_BP_RSPAMD_REDIRECT_URI": imports.rspamd_redirect_uri,
+            "AK_BP_ROUNDCUBE_REDIRECT_URI": imports.roundcube_redirect_uri,
             "AUTHENTIK_BLUEPRINT_SYNC_VERSION": "9",
         }
 
@@ -185,6 +195,18 @@ class AuthentikStack(Stack):
             ),
             "AK_BP_VAULTWARDEN_CLIENT_SECRET": ecs.Secret.from_secrets_manager(
                 vaultwarden_oidc_secret, "client_secret"
+            ),
+            "AK_BP_RSPAMD_CLIENT_ID": ecs.Secret.from_secrets_manager(
+                rspamd_oidc_secret, "client_id"
+            ),
+            "AK_BP_RSPAMD_CLIENT_SECRET": ecs.Secret.from_secrets_manager(
+                rspamd_oidc_secret, "client_secret"
+            ),
+            "AK_BP_ROUNDCUBE_CLIENT_ID": ecs.Secret.from_secrets_manager(
+                roundcube_oidc_secret, "client_id"
+            ),
+            "AK_BP_ROUNDCUBE_CLIENT_SECRET": ecs.Secret.from_secrets_manager(
+                roundcube_oidc_secret, "client_secret"
             ),
         }
 

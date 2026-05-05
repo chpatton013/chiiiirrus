@@ -89,6 +89,7 @@ postmaster_address = "postmaster@chiiiirs.com"
 image_version = "14.0.0"
 enable_smtps = true
 enable_clamav = true
+users = ["chris"]
 
 [mail.task]
 cpu = 1024
@@ -109,3 +110,18 @@ secret_name = "mail/ses-relay"
 # /.well-known/webfinger* to WebFingerStack's API so OIDC discovery
 # keeps working at the apex; everything else is served from S3.
 www_subdomain = "www"
+
+[webmail]
+# Roundcube webmail at mail.<public_domain>. ALB enforces Authentik
+# OIDC; users then enter their IMAP password to sign in to Roundcube.
+# Auto-login (single-step SSO) is a future follow-up - it requires
+# either a Dovecot master-user shim with a custom Roundcube plugin or
+# end-to-end OAUTHBEARER between Roundcube and Dovecot.
+subdomain = "mail"
+image_version = "1.6.10-apache"
+
+[webmail.task]
+cpu = 256
+memory_limit_mib = 512
+desired_count = 1
+min_healthy_percent = 0

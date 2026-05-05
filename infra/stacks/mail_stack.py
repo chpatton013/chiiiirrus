@@ -7,6 +7,7 @@ from aws_cdk import (
     Duration,
     RemovalPolicy,
     Stack,
+    aws_backup as backup,
     aws_ec2 as ec2,
     aws_ecr_assets as ecr_assets,
     aws_ecs as ecs,
@@ -26,6 +27,7 @@ from aws_cdk import (
 from constructs import Construct
 
 from ..constructs.fargate_service import PrivateEgressFargateService
+from ..constructs.public_http_alb import PublicHttpAlb
 from ..models.asset_loader import AssetLoader
 from ..models.foundation_exports import FoundationExports
 from ..models.mail_config import MailConfig
@@ -35,6 +37,12 @@ CONFIG_MOUNT = "/tmp/docker-mailserver"
 MAIL_MOUNT = "/var/mail"
 CLAMAV_MOUNT = "/var/lib/clamav"
 LE_DIR = f"{CONFIG_MOUNT}/letsencrypt"
+
+# rspamd's worker-controller HTTP UI. Listens inside the container; the
+# init-container override (worker-controller.inc) binds it to 0.0.0.0
+# and grants the VPC CIDR `secure_ip` so the ALB-OIDC frontend doesn't
+# need rspamd's own auth.
+RSPAMD_UI_PORT = 11334
 
 MAIL_PORTS: list[tuple[str, int]] = [
     ("smtp", 25),  # incoming MX + in-VPC submission via mynetworks
@@ -50,6 +58,25 @@ class MailImports:
     cfg: MailConfig
     foundation: FoundationExports
     assets: AssetLoader
+    # Authentik issuer base URL (e.g.
+    # "https://auth.<public_domain>/application/o") and the rspamd
+    # ALB-OIDC redirect URI
+    # ("https://rspamd.<public_domain>/oauth2/idpresponse"). Both flow
+    # in from `app_builder.py` so MailStack can compose the OIDC
+    # authorize/token/userinfo URLs and reference the OIDC secret.
+    authentik_issuer_base: str
+    rspamd_redirect_uri: str
+
+
+@dataclass(frozen=True)
+class MailExports:
+    # Mail's EFS file system + the access point reserved for Roundcube
+    # state (sqlite + config). WebmailStack mounts this access point so
+    # Roundcube state lives on the same EFS as the mail server,
+    # bringing it under the same backup plan.
+    efs_filesystem: efs.IFileSystem
+    efs_security_group: ec2.ISecurityGroup
+    roundcube_access_point: efs.IAccessPoint
 
 
 class MailStack(Stack):
@@ -143,6 +170,7 @@ class MailStack(Stack):
         ap_mail = _ap("MailAp", "/dms/mail")
         ap_config = _ap("ConfigAp", "/dms/config")
         ap_clamav = _ap("ClamavAp", "/dms/clamav")
+        ap_roundcube = _ap("RoundcubeAp", "/dms/roundcube")
 
         ###
         # NLB + Fargate service.
@@ -222,8 +250,14 @@ class MailStack(Stack):
             container_kwargs=dict(
                 image=image,
                 port_mappings=[
-                    ecs.PortMapping(container_port=p, host_port=p)
-                    for _, p in MAIL_PORTS
+                    *(
+                        ecs.PortMapping(container_port=p, host_port=p)
+                        for _, p in MAIL_PORTS
+                    ),
+                    ecs.PortMapping(
+                        container_port=RSPAMD_UI_PORT,
+                        host_port=RSPAMD_UI_PORT,
+                    ),
                 ],
                 environment=environment,
                 secrets=secrets,
@@ -277,7 +311,7 @@ class MailStack(Stack):
 
         init_script_lines = [
             "set -eu",
-            f"mkdir -p {CONFIG_MOUNT}/rspamd/dkim {LE_DIR}",
+            f"mkdir -p {CONFIG_MOUNT}/rspamd/dkim {CONFIG_MOUNT}/rspamd/override.d {LE_DIR}",
             # 1. DKIM private key (selector s1)
             (
                 f'aws secretsmanager get-secret-value --secret-id "$DKIM_SECRET" '
@@ -285,14 +319,21 @@ class MailStack(Stack):
                 f"> {CONFIG_MOUNT}/rspamd/dkim/{DKIM_SELECTOR}.key"
             ),
             f"chmod 0600 {CONFIG_MOUNT}/rspamd/dkim/{DKIM_SELECTOR}.key",
-            # 2. Postmaster mailbox (SHA512-CRYPT for Dovecot)
+            # 2. postfix-accounts.cf - postmaster + per-user mailboxes.
+            # Each line: <full-address>|{SHA512-CRYPT}<dovecot hash>
             (
-                'pm=$(aws secretsmanager get-secret-value --secret-id "$POSTMASTER_SECRET" '
-                "--query SecretString --output text | jq -r .secret)"
-            ),
-            (
-                f'echo "$POSTMASTER_ADDRESS|{{SHA512-CRYPT}}$(openssl passwd -6 "$pm")" '
-                f"> {CONFIG_MOUNT}/postfix-accounts.cf"
+                "{ "
+                "pm=$(aws secretsmanager get-secret-value "
+                '--secret-id "$POSTMASTER_SECRET" '
+                "--query SecretString --output text | jq -r .secret); "
+                'echo "$POSTMASTER_ADDRESS|{SHA512-CRYPT}$(openssl passwd -6 "$pm")"; '
+                "for user in $MAIL_USERS; do "
+                "pw=$(aws secretsmanager get-secret-value "
+                '--secret-id "mail/users/$user" '
+                "--query SecretString --output text | jq -r .secret); "
+                'echo "$user@$MAIL_DOMAIN|{SHA512-CRYPT}$(openssl passwd -6 "$pw")"; '
+                "done; "
+                f"}} > {CONFIG_MOUNT}/postfix-accounts.cf"
             ),
             # 3a. mynetworks override so VPC traffic submits without SASL.
             (
@@ -313,6 +354,17 @@ class MailStack(Stack):
                 "printf 'submission/inet/smtpd_recipient_restrictions="
                 "permit_mynetworks,permit_sasl_authenticated,reject\\n'; "
                 f"}} > {CONFIG_MOUNT}/postfix-master.cf"
+            ),
+            # 3c. rspamd worker-controller override: bind the HTTP UI to
+            # 0.0.0.0:11334 (default is 127.0.0.1) and skip rspamd's own
+            # password check for VPC traffic. The internal ALB's OIDC
+            # action is the gate.
+            (
+                "{ "
+                "printf 'bind_socket = \"*:%s\";\\n' "
+                f'"{RSPAMD_UI_PORT}"; '
+                'printf \'secure_ip = "%s";\\n\' "$VPC_CIDR"; '
+                f"}} > {CONFIG_MOUNT}/rspamd/override.d/worker-controller.inc"
             ),
             # 4. Let's Encrypt cert (issue once, renew if <30 days from expiry).
             f'export LEGO_PATH="{LE_DIR}"',
@@ -338,6 +390,8 @@ class MailStack(Stack):
                 "POSTMASTER_ADDRESS": cfg.postmaster_address,
                 "VPC_CIDR": foundation.vpc.vpc_cidr_block,
                 "MAIL_FQDN": fqdn,
+                "MAIL_DOMAIN": foundation.public_domain,
+                "MAIL_USERS": " ".join(cfg.users),
                 "DKIM_SECRET": "mail/dkim-private-key",
                 "POSTMASTER_SECRET": "mail/postmaster-password",
                 # lego picks up these from the standard AWS env
@@ -358,6 +412,15 @@ class MailStack(Stack):
         # Init grants: secrets + Route53 (for lego DNS-01)
         dkim_secret.grant_read(service.task_defn.task_role)
         postmaster_secret.grant_read(service.task_defn.task_role)
+        if cfg.users:
+            service.task_defn.task_role.add_to_principal_policy(
+                iam.PolicyStatement(
+                    actions=["secretsmanager:GetSecretValue"],
+                    resources=[
+                        f"arn:aws:secretsmanager:{Aws.REGION}:{Aws.ACCOUNT_ID}:secret:mail/users/*"
+                    ],
+                )
+            )
         service.task_defn.task_role.add_to_principal_policy(
             iam.PolicyStatement(
                 actions=[
@@ -415,6 +478,74 @@ class MailStack(Stack):
                 ec2.Port.tcp(port),
                 f"NLB to mail tcp/{port}",
             )
+
+        ###
+        # Internal ALB for the rspamd web UI. Public DNS -> private IP;
+        # Tailscale clients reach it via the headscale exit-node which
+        # routes the VPC CIDR. The ALB enforces Authentik OIDC; the
+        # rspamd worker-controller's own auth is bypassed for VPC
+        # traffic via the `secure_ip` override the init container
+        # writes alongside the bind_socket override.
+
+        rspamd_fqdn = f"rspamd.{foundation.public_domain}"
+        rspamd_oidc_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "RspamdOidcSecret", "authentik/oidc/rspamd"
+        )
+        rspamd_alb = PublicHttpAlb(
+            self,
+            "RspamdAlb",
+            fqdn=rspamd_fqdn,
+            a_record="rspamd",
+            zone=foundation.public_zone,
+            vpc=foundation.vpc,
+            internet_facing=False,
+        )
+        service.security_group.add_ingress_rule(
+            rspamd_alb.security_group,
+            ec2.Port.tcp(RSPAMD_UI_PORT),
+            "Rspamd ALB to mail rspamd UI",
+        )
+        rspamd_target_group = elbv2.ApplicationTargetGroup(
+            self,
+            "RspamdTargetGroup",
+            vpc=foundation.vpc,
+            port=RSPAMD_UI_PORT,
+            protocol=elbv2.ApplicationProtocol.HTTP,
+            target_type=elbv2.TargetType.IP,
+            deregistration_delay=Duration.seconds(30),
+            health_check=elbv2.HealthCheck(
+                protocol=elbv2.Protocol.HTTP,
+                path="/",
+                healthy_http_codes="200,401",
+            ),
+            targets=[
+                service.service.load_balancer_target(
+                    container_name=service.container.container_name,
+                    container_port=RSPAMD_UI_PORT,
+                    protocol=ecs.Protocol.TCP,
+                ),
+            ],
+        )
+        rspamd_alb.https_listener.add_action(
+            "RspamdOidcGate",
+            action=elbv2.ListenerAction.authenticate_oidc(
+                authorization_endpoint=(
+                    f"{imports.authentik_issuer_base}/rspamd/authorize/"
+                ),
+                token_endpoint=f"{imports.authentik_issuer_base}/rspamd/token/",
+                user_info_endpoint=(
+                    f"{imports.authentik_issuer_base}/rspamd/userinfo/"
+                ),
+                issuer=f"{imports.authentik_issuer_base}/rspamd/",
+                client_id=rspamd_oidc_secret.secret_value_from_json(
+                    "client_id"
+                ).unsafe_unwrap(),
+                client_secret=rspamd_oidc_secret.secret_value_from_json(
+                    "client_secret"
+                ),
+                next=elbv2.ListenerAction.forward([rspamd_target_group]),
+            ),
+        )
 
         ###
         # Monthly EventBridge schedule -> Lambda -> ecs:UpdateService(force).
@@ -512,4 +643,42 @@ class MailStack(Stack):
             type="TXT",
             ttl="1800",
             resource_records=[dkim_resource.get_att_string("PublicKeyTxt")],
+        )
+
+        ###
+        # AWS Backup: daily + weekly snapshots of the mail EFS into the
+        # shared FoundationStack vault. Mail volumes are RETAIN, but
+        # RETAIN doesn't protect against software bugs deleting files.
+
+        backup_plan = backup.BackupPlan(
+            self,
+            "MailBackupPlan",
+            backup_plan_name="mail-efs-backups",
+            backup_vault=foundation.backup_vault,
+        )
+        backup_plan.add_rule(
+            backup.BackupPlanRule(
+                rule_name="daily-7-days",
+                schedule_expression=events.Schedule.cron(minute="0", hour="5"),
+                delete_after=Duration.days(7),
+            )
+        )
+        backup_plan.add_rule(
+            backup.BackupPlanRule(
+                rule_name="weekly-4-weeks",
+                schedule_expression=events.Schedule.cron(
+                    minute="0", hour="6", week_day="SUN"
+                ),
+                delete_after=Duration.days(28),
+            )
+        )
+        backup_plan.add_selection(
+            "MailEfsSelection",
+            resources=[backup.BackupResource.from_efs_file_system(filesystem)],
+        )
+
+        self.exports = MailExports(
+            efs_filesystem=filesystem,
+            efs_security_group=efs_sg,
+            roundcube_access_point=ap_roundcube,
         )
