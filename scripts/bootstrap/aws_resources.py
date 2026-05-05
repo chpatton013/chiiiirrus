@@ -31,6 +31,16 @@ BIN_DIR = REPO_ROOT / "bin"
 CONFIG_PATH = REPO_ROOT / "config.toml"
 CREATE_HOSTED_ZONE = BIN_DIR / "aws-create-hosted-zone"
 WRITE_SECRET = BIN_DIR / "aws-write-secret"
+CDK = BIN_DIR / "cdk"
+
+# Regions that CDK must bootstrap before any stack can deploy. The
+# default region (from the active boto3 session) hosts every stack
+# except SiteStack, which is pinned to us-east-1 because CloudFront's
+# ACM certificate has to live there. Both must be `cdk bootstrap`-ed
+# before `bin/cdk deploy` will succeed.
+CDK_BOOTSTRAP_REGIONS = ("us-east-1",)
+
+SES_SMTP_VERSION = 0x04
 
 sys.path.insert(0, str(REPO_ROOT))
 from infra.models.app_config import load_config  # noqa: E402
@@ -158,7 +168,8 @@ def _write_secret_cmd(
     return cmd
 
 
-SES_SMTP_VERSION = 0x04
+def default_region() -> str:
+    return boto3.Session().region_name or "us-east-1"
 
 
 def derive_ses_smtp_password(secret_access_key: str, region: str) -> str:
@@ -230,6 +241,23 @@ def domain_ses_dkim_enabled(ses, domain: str) -> bool:
     return bool(attrs.get("DkimEnabled")) and bool(attrs.get("DkimTokens"))
 
 
+def cdk_toolkit_exists(region: str) -> bool:
+    cfn = boto3.client("cloudformation", region_name=region)
+    try:
+        cfn.describe_stacks(StackName="CDKToolkit")
+        return True
+    except cfn.exceptions.ClientError:
+        return False
+
+
+def cdk_bootstrap(account: str, region: str) -> None:
+    if cdk_toolkit_exists(region):
+        print(f"CDK already bootstrapped in {region}; skipping")
+        return
+    target = f"aws://{account}/{region}"
+    run([str(CDK), "bootstrap", target], f"cdk-bootstrap ({region})")
+
+
 def iam_user_exists(iam, name: str) -> bool:
     try:
         iam.get_user(UserName=name)
@@ -243,7 +271,6 @@ def bootstrap_ses_smtp_relay(iam_user_name: str) -> tuple[str, str]:
     derive the SMTP password. Returns (access_key_id, smtp_password).
 
     The IAM user name is operator-controlled via [mail.relay].iam_user_name."""
-    region = boto3.Session().region_name or "us-west-2"
     iam = boto3.client("iam")
     if not iam_user_exists(iam, iam_user_name):
         iam.create_user(UserName=iam_user_name)
@@ -252,7 +279,9 @@ def bootstrap_ses_smtp_relay(iam_user_name: str) -> tuple[str, str]:
             PolicyArn="arn:aws:iam::aws:policy/AmazonSESFullAccess",
         )
     access_key = iam.create_access_key(UserName=iam_user_name)["AccessKey"]
-    smtp_password = derive_ses_smtp_password(access_key["SecretAccessKey"], region)
+    smtp_password = derive_ses_smtp_password(
+        access_key["SecretAccessKey"], default_region()
+    )
     return access_key["AccessKeyId"], smtp_password
 
 
@@ -360,6 +389,13 @@ def main() -> int:
 
     cfg = load_config(CONFIG_PATH)
     existing = fetch_existing_secrets() if args.skip_if_exists else set()
+
+    # CDK needs a bootstrapped environment in every region a stack
+    # deploys to. The default region (from the active session) hosts
+    # most stacks; SiteStack is pinned to us-east-1.
+    account = boto3.client("sts").get_caller_identity()["Account"]
+    for region in dict.fromkeys((default_region(), *CDK_BOOTSTRAP_REGIONS)):
+        cdk_bootstrap(account, region)
 
     run(
         [str(CREATE_HOSTED_ZONE), cfg.foundation.public_domain],

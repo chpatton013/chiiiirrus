@@ -187,7 +187,16 @@ script for each step, or take matters into your own hands.
         - Fill in your domain, select "Public hosted zone", then "Create hosted zone"
     - Helper script
         - `bin/aws-create-hosted-zone DOMAIN`
-3. Create persistent secrets used by AWS services.
+3. Bootstrap CDK in every region a stack deploys to. Most stacks live
+   in your default region; SiteStack is pinned to `us-east-1` because
+   CloudFront's ACM certificate has to live there. Skip a region and
+   `bin/cdk deploy` will fail with `SSM parameter
+   /cdk-bootstrap/hnb659fds/version not found`. Each call is idempotent
+   — no-ops if the `CDKToolkit` stack already exists.
+    - Helper script
+        - `bin/cdk bootstrap aws://ACCOUNT_ID/DEFAULT_REGION`
+        - `bin/cdk bootstrap aws://ACCOUNT_ID/us-east-1`
+4. Create persistent secrets used by AWS services.
     - AWS console
         - TODO
     - Helper script
@@ -238,7 +247,7 @@ script for each step, or take matters into your own hands.
           echo "$SMTP_PASSWORD" | bin/aws-write-secret mail/ses-relay \
               --template="{\"username\":\"$ACCESS_KEY_ID\"}" --key=password -
           ```
-4. SES domain setup (also handled automatically by `bin/bootstrap`):
+5. SES domain setup (also handled automatically by `bin/bootstrap`):
     - `aws ses verify-domain-identity --domain DOMAIN`
       (publish the returned token at `_amazonses.DOMAIN` as a TXT record)
     - `aws ses verify-domain-dkim --domain DOMAIN`
@@ -509,9 +518,6 @@ DAG. But they can never declare a cyclical dependency.
           rotation with force-new-deployment on rotation events. Defer IAM
           DB auth until there's a real need — the sidecar cost outweighs
           the rotation cost at single-digit-service scale.
-    - Vaultwarden
-        - Enable SSO
     - Get rid of the Imports types and just use kwargs
     - Be specific about which properties we want from foundation and data exports
     - EFS and RDS backups
-
