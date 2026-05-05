@@ -72,9 +72,6 @@ class AuthentikStack(Stack):
         bootstrap_secret = secretsmanager.Secret.from_secret_name_v2(
             self, "BootstrapSecret", "authentik/bootstrap"
         )
-        smtp_secret = secretsmanager.Secret.from_secret_name_v2(
-            self, "SmtpSecret", "authentik/smtp"
-        )
         db_secret = secretsmanager.Secret.from_secret_name_v2(
             self, "DbSecret", cfg.db.secret_name
         )
@@ -156,12 +153,6 @@ class AuthentikStack(Stack):
         }
 
         common_secrets = {
-            "AUTHENTIK_EMAIL__PASSWORD": ecs.Secret.from_secrets_manager(
-                smtp_secret, "password"
-            ),
-            "AUTHENTIK_EMAIL__USERNAME": ecs.Secret.from_secrets_manager(
-                smtp_secret, "username"
-            ),
             "AUTHENTIK_POSTGRESQL__PASSWORD": ecs.Secret.from_secrets_manager(
                 db_secret, "password"
             ),

@@ -31,7 +31,7 @@ environment variable conventions for configuration and secrets injection, so if
 you're familiar with those, you can do something fancier than using the
 `default` profile.
 
-### Run one-time bootstrap
+### Run automated one-time bootstrap
 
 Run `bin/bootstrap` to complete all one-time setup steps.
 
@@ -45,6 +45,11 @@ You can perform these bootstrapping steps manually if you want more control, or
 need to rerun only a subset of them for some reason.
 See the [Manual Bootstrapping](#Manual-Bootstrapping) section below for more
 details.
+
+### Perform manual one-time bootstrap
+
+After the hosted zone are created by the bootstrap script, copy the 4 NS records
+from Route53 into your registrar's DNS config.
 
 ### Run tests
 
@@ -70,7 +75,7 @@ running with any concurrency.
 
 ## Post-Deploy Setup
 
-The Tailscale, Headscale, Headplane, and Vaultwarden OIDC applications, users,
+The OIDC applications (Tailscale, Headscale, Headplane, and Vaultwarden), users,
 and group memberships are provisioned automatically by Authentik blueprints in
 [`assets/authentik/blueprints/`](./assets/authentik/blueprints/), synced to each
 Authentik task from S3 by an init container on every deploy. The only remaining
@@ -99,13 +104,42 @@ manual step is the Tailscale SaaS-side registration.
       ```
 - Vaultwarden
     - Log in at `https://vaultwarden.<public_domain>` using your SSO identity.
-- Domain registrars
-    - After the hosted zone are created, copy the 4 NS records from Route53 into
-    the registrar DNS config.
+- Mail server (`MailStack`)
+    - **SES production access** (required for outbound to non-verified addresses).
+        - Enter the email address associated with your AWS account.
+        - Enter your mail domain.
+            - Set MAIL FROM domain to `bounce.<public_domain>`
+        - Disable Virtual Deliverability Manager, Auto Validation, Dedicated IP Pools, and Tenant Management
+        - Complete necessary Open Tasks
+            - Confirm your email with SES by following the confirmation email link
+            - Send a test email using the SES mailbox simulator
+            - Verify sending domain by publishing all DNS records in SES > Configuration Identities > your domain (DKIM, MAIL FROM, and DMARC)
+            - Request production access (type = Transactional, website = your domain)
+    - **PTR records on the NLB IPs** (optional). Only matters if you ever
+      bypass SES and have the MailStack speak SMTP directly to remote
+      MTAs from its own IPs — receiving servers may downgrade or reject
+      mail without a matching reverse DNS. Outbound through SES uses
+      Amazon's IPs (which already have clean PTRs), so this can be left
+      undone unless mail-tester.com or a remote MTA flags it.
+        - PTR for an EC2/NLB EIP can only be set by AWS Support. Open a
+          case → "Account and billing" → "Service: Elastic Compute Cloud
+          (EC2)" → "Reverse DNS for EIP".
+        - Provide each NLB IP and the desired PTR
+          (`smtp.<public_domain>` for both is fine).
+        - Get the current NLB IPs with:
+          ```sh
+          dig +short smtp.<public_domain>
+          ```
+        - Note: the NLB IPs are AWS-managed and can change if the NLB is
+          replaced — switch to static EIPs (`subnet_mappings` with
+          `AllocationId`) before requesting PTR if you care about stability.
 
 ## Operations
 
 ### Renaming the Headscale exit-node user
+
+If you ever want to rename the Headscale user that owns the AWS exit node, there
+are a couple manual steps you need to follow.
 
 The `headscale.exit_node.preauthkey_user` config value names the Headscale
 user that owns the Tailscale-side preauthkey for the exit node. The
@@ -165,7 +199,6 @@ script for each step, or take matters into your own hands.
           (RDS master; read by the `DataStack` init Lambda only — no service uses it)
         - `bin/aws-write-secret authentik/database --template='{"username":"authentik"}' --key=password --length=32 --exclude-punctuation`
         - `bin/aws-write-secret headscale/database --template='{"username":"headscale"}' --key=password --length=32 --exclude-punctuation`
-        - `bin/aws-write-secret authentik/smtp --template='{"username":"USERNAME"}' --key=password`
         - `bin/aws-write-secret authentik/oidc/tailscale --template='{"client_id":"CLIENT_ID"}' --key=client_secret`
           (values from the `tailscale` provider registered in Authentik)
         - `bin/aws-write-secret authentik/oidc/headscale -`
@@ -180,13 +213,31 @@ script for each step, or take matters into your own hands.
         - `echo -n pending | bin/aws-write-secret headscale/admin-api-key --template='{}' --key=secret -  # sentinel placeholder; replaced by HeadscaleStack`
         - `bin/aws-write-secret vaultwarden/database --template='{"username":"vaultwarden"}' --key=password --length=32 --exclude-punctuation`
         - `bin/aws-write-secret vaultwarden/admin-token --template='{}' --key=secret --length=64 --exclude-punctuation`
-        - `bin/aws-write-secret vaultwarden/smtp --template='{"username":"USERNAME"}' --key=password`
         - `bin/aws-write-secret mail/postmaster-password --template='{}' --key=secret --length=32 --exclude-punctuation`
         - `echo -n pending | bin/aws-write-secret mail/dkim-private-key --template='{}' --key=secret -  # sentinel placeholder; the MailStack DKIM Custom Resource replaces it on first deploy`
-        - `mail/ses-relay`: create an IAM user with `AmazonSESFullAccess`,
-          mint an access key, and derive the SES SMTP password (see
-          `derive_ses_smtp_password` in `scripts/bootstrap/aws_resources.py`).
-          Stored as `{"username":"AKIA...","password":"<derived>"}`.
+        - `mail/ses-relay` is a multi-step setup, so it has no single
+          `aws-write-secret` line. The manual equivalent of what
+          `bin/bootstrap` does:
+          ```sh
+          # 1. IAM user dedicated to SES SMTP submission. The name must
+          #    match `[mail.relay].iam_user_name` in config.toml.
+          bin/aws iam create-user --user-name "$IAM_USER_NAME"
+          bin/aws iam attach-user-policy --user-name "$IAM_USER_NAME" \
+              --policy-arn arn:aws:iam::aws:policy/AmazonSESFullAccess
+          # 2. Mint an access key. Capture both fields from the JSON.
+          bin/aws iam create-access-key --user-name "$IAM_USER_NAME"
+          # 3. Derive the SES SMTP password from the secret access key
+          #    via the documented HMAC-SHA256 algorithm. The helper in
+          #    scripts/bootstrap/aws_resources.py is the simplest way:
+          bin/python -c "
+          import sys
+          sys.path.insert(0, 'scripts')
+          from bootstrap.aws_resources import derive_ses_smtp_password
+          print(derive_ses_smtp_password('$SECRET_ACCESS_KEY', '$REGION'))"
+          # 4. Write {access_key_id, smtp_password} into Secrets Manager.
+          echo "$SMTP_PASSWORD" | bin/aws-write-secret mail/ses-relay \
+              --template="{\"username\":\"$ACCESS_KEY_ID\"}" --key=password -
+          ```
 4. SES domain setup (also handled automatically by `bin/bootstrap`):
     - `aws ses verify-domain-identity --domain DOMAIN`
       (publish the returned token at `_amazonses.DOMAIN` as a TXT record)
@@ -194,9 +245,10 @@ script for each step, or take matters into your own hands.
       (publish each of the three returned tokens as
       `<token>._domainkey.DOMAIN` CNAME records pointing to
       `<token>.dkim.amazonses.com`)
-    - SES production access (manual support ticket): "Service Quota Increase
-      → SES → Production Access". Without it, SES only delivers to verified
-      addresses.
+    - SES production access (and optional PTR records) require AWS
+      Support tickets and can't be automated — see the "Mail server"
+      bullet under [Post-Deploy Setup](#post-deploy-setup) for the
+      step-by-step.
 
 ## Secrets Format Convention
 
@@ -327,6 +379,56 @@ DAG. But they can never declare a cyclical dependency.
           the stack is deployed
     - MagicDNS base domain: `{headscale.private_subdomain}.{foundation.private_domain}`
       (e.g. `ts.example.net`)
+- [Mail Stack](./infra/stacks/mail_stack.py)
+    - Self-hosted `docker-mailserver` (Postfix + Dovecot + Rspamd +
+      ClamAV) on Fargate, with AWS SES as the outbound relay.
+    - Resources:
+        - Services: single Fargate task at `smtp.<public_domain>` with
+          ports 25 / 465 / 587 / 143 / 993 fronted by a public NLB
+        - Storage: encrypted EFS with three access points
+          (`mail`, `config`, `clamav`)
+        - Init container (one task, four jobs, each idempotent):
+            1. fetches the DKIM private key from
+               `mail/dkim-private-key` onto EFS at the rspamd-expected
+               path (`rspamd/dkim/s1.key`),
+            2. hashes `mail/postmaster-password` and writes
+               `postfix-accounts.cf` for the postmaster mailbox,
+            3. writes a `postfix-main.cf` override adding the VPC CIDR
+               to `mynetworks` and a `postfix-master.cf` override that
+               re-adds `permit_mynetworks` to the submission service so
+               in-VPC clients (Authentik, Vaultwarden) submit on 587
+               without SASL,
+            4. issues / renews the Let's Encrypt cert via DNS-01 against
+               Route53 using `lego` (renew if <30 days from expiry)
+        - DKIM: a Custom Resource Lambda generates an RSA-2048 keypair
+          on first deploy, stores the private key in
+          `mail/dkim-private-key`, and emits the public key as a Route53
+          TXT record at `s1._domainkey.<public_domain>`. Subsequent
+          deploys are idempotent (re-derives the public key from the
+          stored private key).
+        - SES relay: a dedicated IAM SMTP user
+          (`{mail.relay.iam_user_name}`) is created by the bootstrap
+          script; the secret access key is converted to a SES SMTP
+          password via the documented HMAC-SHA256 algorithm and stored
+          at `mail/ses-relay`. The mail container reads it as
+          `RELAY_USER` / `RELAY_PASSWORD` and Postfix relays all
+          outbound through `email-smtp.<region>.amazonaws.com:587`.
+        - Monthly EventBridge schedule → tiny
+          `ecs:UpdateService --force-new-deployment` Lambda guarantees
+          the init container (and therefore the Let's Encrypt renewal)
+          runs at least once a month even if nothing else touches the
+          stack.
+        - DNS published in the public hosted zone:
+            - `A smtp` aliased to the NLB,
+            - `MX @` → `smtp.<public_domain>`,
+            - `TXT @` SPF (`v=spf1 include:amazonses.com -all`),
+            - `TXT _dmarc` (`p=quarantine`),
+            - `TXT s1._domainkey` (DKIM, set by the Custom Resource),
+            - `TXT _amazonses` and 3× `*._domainkey` CNAMEs for SES
+              identity verification (set by `bin/bootstrap`).
+    - Out-of-band steps that the bootstrap script can't automate are
+      documented under [Post-Deploy Setup](#post-deploy-setup) → "Mail
+      server" (SES production-access ticket; PTR records).
 - [OpenClaw Stack](./infra/stacks/openclaw_stack.py)
     - Agentic assistant platform
     - Resources:
@@ -349,7 +451,6 @@ DAG. But they can never declare a cyclical dependency.
         - Network: public ALB at `vaultwarden.<public_domain>`
 - Planned public AWS stacks:
     - Matrix Synapse
-    - mail
 - Planned private AWS stacks:
     - searXNG
 - Planned homelab hosting:
@@ -385,3 +486,4 @@ DAG. But they can never declare a cyclical dependency.
     - Get rid of the Imports types and just use kwargs
     - Be specific about which properties we want from foundation and data exports
     - EFS and RDS backups
+

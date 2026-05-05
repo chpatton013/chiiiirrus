@@ -53,9 +53,6 @@ class VaultwardenStack(Stack):
         admin_token_secret = secretsmanager.Secret.from_secret_name_v2(
             self, "AdminTokenSecret", "vaultwarden/admin-token"
         )
-        smtp_secret = secretsmanager.Secret.from_secret_name_v2(
-            self, "SmtpSecret", "vaultwarden/smtp"
-        )
         db_secret = secretsmanager.Secret.from_secret_name_v2(
             self, "DbSecret", cfg.db.secret_name
         )
@@ -122,8 +119,6 @@ class VaultwardenStack(Stack):
             "ADMIN_TOKEN": ecs.Secret.from_secrets_manager(
                 admin_token_secret, "secret"
             ),
-            "SMTP_USERNAME": ecs.Secret.from_secrets_manager(smtp_secret, "username"),
-            "SMTP_PASSWORD": ecs.Secret.from_secrets_manager(smtp_secret, "password"),
             "DB_USER": ecs.Secret.from_secrets_manager(db_secret, "username"),
             "DB_PASSWORD": ecs.Secret.from_secrets_manager(db_secret, "password"),
             "SSO_CLIENT_ID": ecs.Secret.from_secrets_manager(oidc_secret, "client_id"),

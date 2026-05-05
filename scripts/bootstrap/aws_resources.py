@@ -346,8 +346,6 @@ def main() -> int:
     parser.add_argument("--authentik-secret-key")
     parser.add_argument("--authentik-bootstrap-email")
     parser.add_argument("--authentik-bootstrap-password")
-    parser.add_argument("--authentik-smtp-username")
-    parser.add_argument("--authentik-smtp-password")
     parser.add_argument("--tailscale-oidc-client-id")
     parser.add_argument("--tailscale-oidc-client-secret")
     parser.add_argument("--headscale-oidc-client-id")
@@ -357,8 +355,6 @@ def main() -> int:
     parser.add_argument("--vaultwarden-admin-token")
     parser.add_argument("--vaultwarden-oidc-client-id")
     parser.add_argument("--vaultwarden-oidc-client-secret")
-    parser.add_argument("--vaultwarden-smtp-username")
-    parser.add_argument("--vaultwarden-smtp-password")
     parser.add_argument("--mail-postmaster-password")
     args = parser.parse_args()
 
@@ -462,25 +458,6 @@ def main() -> int:
             length=32,
         )
 
-    if needs_write("authentik/smtp", existing):
-        write_secret(
-            "authentik/smtp",
-            template={
-                "username": resolve_required(
-                    args,
-                    "authentik_smtp_username",
-                    "Authentik SMTP username",
-                    default="authentik",
-                )
-            },
-            key="password",
-            provided=resolve_optional_password(
-                args, "authentik_smtp_password", "Authentik SMTP password"
-            ),
-            length=32,
-            exclude_punctuation=True,
-        )
-
     if needs_write("authentik/oidc/tailscale", existing):
         write_secret(
             "authentik/oidc/tailscale",
@@ -551,25 +528,6 @@ def main() -> int:
                 args, "vaultwarden_admin_token", "Vaultwarden admin token"
             ),
             length=64,
-            exclude_punctuation=True,
-        )
-
-    if needs_write("vaultwarden/smtp", existing):
-        write_secret(
-            "vaultwarden/smtp",
-            template={
-                "username": resolve_required(
-                    args,
-                    "vaultwarden_smtp_username",
-                    "Vaultwarden SMTP username",
-                    default="vaultwarden",
-                )
-            },
-            key="password",
-            provided=resolve_optional_password(
-                args, "vaultwarden_smtp_password", "Vaultwarden SMTP password"
-            ),
-            length=32,
             exclude_punctuation=True,
         )
 

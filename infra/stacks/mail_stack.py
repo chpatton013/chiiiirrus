@@ -300,14 +300,19 @@ class MailStack(Stack):
                 f"> {CONFIG_MOUNT}/postfix-main.cf"
             ),
             # 3b. master.cf override: re-add permit_mynetworks to the
-            # submission (587) service's recipient_restrictions so VPC
-            # clients can submit on 587 without SASL. Default DMS
-            # submission is permit_sasl_authenticated,reject -- which
-            # would otherwise reject our internal services.
+            # submission (587) service's client + relay + recipient
+            # restrictions so VPC clients submit on 587 without SASL.
+            # All three default to permit_sasl_authenticated,reject in
+            # DMS; missing any one rejects internal services.
             (
+                "{ "
+                "printf 'submission/inet/smtpd_client_restrictions="
+                "permit_mynetworks,permit_sasl_authenticated,reject\\n'; "
+                "printf 'submission/inet/smtpd_relay_restrictions="
+                "permit_mynetworks,permit_sasl_authenticated,reject\\n'; "
                 "printf 'submission/inet/smtpd_recipient_restrictions="
-                "permit_mynetworks,permit_sasl_authenticated,reject\\n' "
-                f"> {CONFIG_MOUNT}/postfix-master.cf"
+                "permit_mynetworks,permit_sasl_authenticated,reject\\n'; "
+                f"}} > {CONFIG_MOUNT}/postfix-master.cf"
             ),
             # 4. Let's Encrypt cert (issue once, renew if <30 days from expiry).
             f'export LEGO_PATH="{LE_DIR}"',
@@ -357,6 +362,7 @@ class MailStack(Stack):
             iam.PolicyStatement(
                 actions=[
                     "route53:ListHostedZonesByName",
+                    "route53:ListResourceRecordSets",
                     "route53:GetChange",
                     "route53:GetHostedZone",
                 ],
@@ -390,12 +396,18 @@ class MailStack(Stack):
                 port=port,
                 protocol=elbv2.Protocol.TCP,
             )
+            target = service.service.load_balancer_target(
+                container_name=service.container.container_name,
+                container_port=port,
+                protocol=ecs.Protocol.TCP,
+            )
             listener.add_targets(
                 f"Tg{port}",
                 port=port,
                 protocol=elbv2.Protocol.TCP,
-                targets=[service.service],
+                targets=[target],
                 deregistration_delay=Duration.seconds(30),
+                preserve_client_ip=False,
                 health_check=elbv2.HealthCheck(protocol=elbv2.Protocol.TCP),
             )
             service.security_group.add_ingress_rule(
