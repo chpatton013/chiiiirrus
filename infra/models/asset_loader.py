@@ -24,6 +24,12 @@ class AssetLoader:
             raise FileNotFoundError(f"blueprints asset not found: {path}")
         return path
 
+    def site_path(self) -> pathlib.Path:
+        path = self._assets / "site"
+        if not path.is_dir():
+            raise FileNotFoundError(f"site asset not found: {path}")
+        return path
+
     @functools.cache
     def read_text(self, *parts: str) -> str:
         return (self._assets.joinpath(*parts)).read_text()

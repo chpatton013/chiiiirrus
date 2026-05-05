@@ -8,6 +8,7 @@ from .data_config import DataConfig
 from .foundation_config import FoundationConfig
 from .headscale_config import HeadscaleConfig
 from .mail_config import MailConfig
+from .site_config import SiteConfig
 from .vaultwarden_config import VaultwardenConfig
 from .webfinger_config import WebFingerConfig
 
@@ -21,6 +22,7 @@ class AppConfig:
     headscale: HeadscaleConfig
     vaultwarden: VaultwardenConfig
     mail: MailConfig
+    site: SiteConfig
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
@@ -32,6 +34,7 @@ class AppConfig:
             headscale=HeadscaleConfig.load(data["headscale"]),
             vaultwarden=VaultwardenConfig.load(data["vaultwarden"]),
             mail=MailConfig.load(data["mail"]),
+            site=SiteConfig.load(data["site"]),
         )
 
 

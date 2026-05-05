@@ -8,6 +8,7 @@ from .stacks.foundation_stack import FoundationImports, FoundationStack
 from .stacks.headscale_stack import HeadscaleImports, HeadscaleStack
 from .stacks.mail_stack import MailImports, MailStack
 from .stacks.openclaw_stack import OpenClawStack
+from .stacks.site_stack import SiteImports, SiteStack
 from .stacks.vaultwarden_stack import VaultwardenImports, VaultwardenStack
 from .stacks.webfinger_stack import WebFingerImports, WebFingerStack
 
@@ -28,11 +29,17 @@ def build_app(
     )
     vaultwarden_fqdn = f"{cfg.vaultwarden.subdomain}.{cfg.foundation.public_domain}"
 
+    # CloudFront / ACM-for-CloudFront only live in us-east-1, so SiteStack
+    # is pinned there. Everything else stays in the app's primary region;
+    # cross-stack references between regions are explicitly enabled.
+    site_env = cdk.Environment(account=env.account, region="us-east-1")
+
     foundation = FoundationStack(
         app,
         "FoundationStack",
         imports=FoundationImports(cfg=cfg.foundation),
         env=env,
+        cross_region_references=True,
     ).exports
     data = DataStack(
         app,
@@ -61,7 +68,7 @@ def build_app(
         ),
         env=env,
     )
-    WebFingerStack(
+    webfinger = WebFingerStack(
         app,
         "WebFingerStack",
         imports=WebFingerImports(
@@ -71,7 +78,8 @@ def build_app(
             authentik_issuer_base=authentik_issuer_base,
         ),
         env=env,
-    )
+        cross_region_references=True,
+    ).exports
     HeadscaleStack(
         app,
         "HeadscaleStack",
@@ -104,5 +112,17 @@ def build_app(
             assets=assets,
         ),
         env=env,
+    )
+    SiteStack(
+        app,
+        "SiteStack",
+        imports=SiteImports(
+            cfg=cfg.site,
+            foundation=foundation,
+            assets=assets,
+            webfinger_api_domain=webfinger.api_invoke_domain,
+        ),
+        env=site_env,
+        cross_region_references=True,
     )
     OpenClawStack(app, "OpenClawStack", env=env)

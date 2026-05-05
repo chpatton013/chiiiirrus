@@ -442,6 +442,34 @@ DAG. But they can never declare a cyclical dependency.
           privileges to communicate with anything internal.
         - I may want to modify this setup to reuse the foundation VPC and host
           in Fargate. Will need to get more trust in the system first.
+- [Site Stack](./infra/stacks/site_stack.py)
+    - Static landing page at the apex (`<public_domain>` and
+      `www.<public_domain>`).
+    - Resources:
+        - Storage: private S3 bucket; CloudFront reads via Origin Access
+          Control (no public bucket policy)
+        - CDN: CloudFront distribution with two behaviors —
+            - default (`/*`) → S3 (serves `assets/site/index.html`),
+            - `/.well-known/webfinger*` → WebFingerStack's HTTP API
+              (cache disabled, query string forwarded). Lets the apex
+              continue to serve OIDC discovery for Tailscale while
+              everything else is a static page.
+        - TLS: ACM cert in `us-east-1` (CloudFront's hard requirement),
+          DNS-validated against the public hosted zone, covering both
+          apex and `www.`
+        - DNS: Route53 A-record aliases at apex and `www.`
+        - Content: `assets/site/index.html` shipped via
+          `BucketDeployment` and CloudFront-invalidated (`/*`) on every
+          deploy
+    - Notes:
+        - This stack is pinned to `us-east-1`. FoundationStack and
+          WebFingerStack opt into `cross_region_references=True` so the
+          public hosted zone and the WebFinger API ID can be passed
+          across regions.
+        - The point of this stack is to give `<public_domain>/` a real
+          page. AWS Support reviews the SES production-access request
+          against the URL you supply on the form, and a bare apex that
+          returns 404 reads as suspicious.
 - [Vaultwarden Stack](./infra/stacks/vaultwarden_stack.py)
     - Self-hosted Bitwarden-compatible password vault
     - Resources:

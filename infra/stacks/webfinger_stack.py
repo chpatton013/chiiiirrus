@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from aws_cdk import (
+    Aws,
     Duration,
     Stack,
     aws_apigatewayv2 as apigwv2,
@@ -10,7 +11,6 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-from ..constructs.public_http_api import PublicHttpApi
 from ..models.asset_loader import AssetLoader
 from ..models.foundation_exports import FoundationExports
 from ..models.webfinger_config import WebFingerConfig
@@ -24,7 +24,20 @@ class WebFingerImports:
     authentik_issuer_base: str
 
 
+@dataclass(frozen=True)
+class WebFingerExports:
+    # Regional invoke domain for the HTTP API (default stage, no path
+    # prefix). SiteStack uses this as a CloudFront origin and routes
+    # `/.well-known/webfinger*` to it; the apex hostname itself is
+    # owned by SiteStack's CloudFront distribution.
+    api_invoke_domain: str
+
+
 class WebFingerStack(Stack):
+    @property
+    def exports(self) -> WebFingerExports:
+        return self._exports
+
     def __init__(
         self,
         scope: Construct,
@@ -36,7 +49,6 @@ class WebFingerStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         cfg = imports.cfg
-        foundation = imports.foundation
         oidc_issuer_url = (
             f"{imports.authentik_issuer_base}/{cfg.oidc_issuer_application}/"
         )
@@ -54,17 +66,15 @@ class WebFingerStack(Stack):
             },
         )
 
-        public_api = PublicHttpApi(
-            self,
-            "Api",
-            fqdn=foundation.public_domain,
-            a_record=foundation.public_domain,
-            zone=foundation.public_zone,
-        )
-        public_api.api.add_routes(
+        api = apigwv2.HttpApi(self, "HttpApi")
+        api.add_routes(
             path="/.well-known/webfinger",
             methods=[apigwv2.HttpMethod.GET],
             integration=apigwv2_integrations.HttpLambdaIntegration(
                 "Integration", cast(lambda_.IFunction, handler)
             ),
+        )
+
+        self._exports = WebFingerExports(
+            api_invoke_domain=f"{api.api_id}.execute-api.{Aws.REGION}.amazonaws.com",
         )
