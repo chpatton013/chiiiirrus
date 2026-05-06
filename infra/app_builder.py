@@ -132,6 +132,7 @@ def build_app(
             cfg=cfg.webmail,
             foundation=foundation,
             mail=mail,
+            assets=assets,
             mail_fqdn=mail_fqdn,
             authentik_issuer_base=authentik_issuer_base,
         ),

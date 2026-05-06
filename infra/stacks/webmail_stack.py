@@ -4,6 +4,7 @@ from aws_cdk import (
     Duration,
     Stack,
     aws_ec2 as ec2,
+    aws_ecr_assets as ecr_assets,
     aws_ecs as ecs,
     aws_efs as efs,
     aws_elasticloadbalancingv2 as elbv2,
@@ -14,6 +15,7 @@ from constructs import Construct
 
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
+from ..models.asset_loader import AssetLoader
 from ..models.foundation_exports import FoundationExports
 from ..models.webmail_config import WebmailConfig
 from .mail_stack import MailExports
@@ -27,6 +29,7 @@ class WebmailImports:
     cfg: WebmailConfig
     foundation: FoundationExports
     mail: MailExports
+    assets: AssetLoader
     # Mail server hostname (smtp.<public_domain>) - Roundcube talks to
     # IMAPS:993 + STARTTLS:587 through the public NLB.
     mail_fqdn: str
@@ -51,6 +54,7 @@ class WebmailStack(Stack):
         cfg = imports.cfg
         foundation = imports.foundation
         mail = imports.mail
+        assets = imports.assets
         fqdn = f"{cfg.subdomain}.{foundation.public_domain}"
 
         oidc_secret = secretsmanager.Secret.from_secret_name_v2(
@@ -158,82 +162,30 @@ class WebmailStack(Stack):
         )
 
         ###
-        # Init container - idempotently load the Roundcube sqlite schema
-        # before the main container starts. The upstream image's
-        # entrypoint only runs schema init when sqlite.db is absent;
-        # on a fresh EFS access point the file gets touched (or is
-        # left empty by a previous failed boot), the entrypoint sees
-        # something there, skips schema load, and the main container
-        # then crashes on every request with `no such table: session`.
-        # This init owns schema (re-)loading + perms so a first deploy
-        # converges on its own.
+        # Init container - idempotently bootstraps the sqlite schema +
+        # writes the Roundcube oauth.inc.php so the main Roundcube
+        # container can run the OAuth flow against Authentik on first
+        # request. Logic lives in assets/webmail_init/init.sh; this
+        # block just wires the env vars + secrets the script reads.
 
-        init_script = (
-            "set -eu\n"
-            f"mkdir -p {ROUNDCUBE_DATA_DIR}/db {ROUNDCUBE_DATA_DIR}/config\n"
-            # 1. Re-create the DB if it's absent or doesn't have a
-            # `session` table. Otherwise leave it alone (preserves
-            # accumulated user prefs, contacts, etc.).
-            "php -r '\n"
-            f'  $f = "{ROUNDCUBE_DATA_DIR}/db/sqlite.db";\n'
-            "  $need_init = !file_exists($f);\n"
-            "  if (!$need_init) {\n"
-            "    try {\n"
-            '      $db = new PDO("sqlite:" . $f);\n'
-            "      $r = $db->query(\n"
-            '        "SELECT name FROM sqlite_master "\n'
-            '        . "WHERE type=\\"table\\" AND name=\\"session\\""\n'
-            "      )->fetch();\n"
-            "      $need_init = !$r;\n"
-            "    } catch (Throwable $e) {\n"
-            "      $need_init = true;\n"
-            "    }\n"
-            "  }\n"
-            "  if ($need_init) {\n"
-            "    @unlink($f);\n"
-            '    $db = new PDO("sqlite:" . $f);\n'
-            "    $db->exec(\n"
-            '      file_get_contents("/var/www/html/SQL/sqlite.initial.sql")\n'
-            "    );\n"
-            '    echo "schema loaded\\n";\n'
-            "  } else {\n"
-            '    echo "schema present\\n";\n'
-            "  }\n"
-            "'\n"
-            # 2. Templated oauth2 config so Roundcube can run the
-            # OAuth flow itself against Authentik. ECS injects the
-            # client_id/secret as task-launch secrets (init_secrets)
-            # so they never cross CFN parameters. The leading "\\$"
-            # in the heredoc tells the shell to emit a literal "$" -
-            # PHP needs "$config[...]" to survive.
-            f"cat > {ROUNDCUBE_DATA_DIR}/config/oauth.inc.php <<PHP\n"
-            "<?php\n"
-            "\\$config['oauth_provider'] = 'generic';\n"
-            "\\$config['oauth_provider_name'] = 'Authentik';\n"
-            "\\$config['oauth_client_id'] = '$OAUTH_CLIENT_ID';\n"
-            "\\$config['oauth_client_secret'] = '$OAUTH_CLIENT_SECRET';\n"
-            "\\$config['oauth_auth_uri'] = '$AUTHENTIK_ISSUER_BASE/authorize/';\n"
-            "\\$config['oauth_token_uri'] = '$AUTHENTIK_ISSUER_BASE/token/';\n"
-            "\\$config['oauth_identity_uri'] = '$AUTHENTIK_ISSUER_BASE/userinfo/';\n"
-            "\\$config['oauth_scope'] = 'openid profile email offline_access';\n"
-            "\\$config['oauth_pkce'] = 'S256';\n"
-            "\\$config['oauth_identity_fields'] = ['email'];\n"
-            "\\$config['imap_auth_type'] = 'XOAUTH2';\n"
-            "\\$config['smtp_auth_type'] = 'XOAUTH2';\n"
-            "\\$config['login_autocomplete'] = 0;\n"
-            "PHP\n"
-            f"chown -R www-data:www-data {ROUNDCUBE_DATA_DIR}\n"
-            f"chmod 0640 {ROUNDCUBE_DATA_DIR}/db/sqlite.db\n"
-            f"chmod 0640 {ROUNDCUBE_DATA_DIR}/config/oauth.inc.php\n"
+        init_image = ecs.ContainerImage.from_docker_image_asset(
+            ecr_assets.DockerImageAsset(
+                self,
+                "RoundcubeInitImage",
+                directory=str(assets.docker_path("webmail_init")),
+                build_args={"ROUNDCUBE_VERSION": cfg.image_version},
+                platform=ecr_assets.Platform.LINUX_AMD64,
+            )
         )
         init_log_group = logs.LogGroup(self, "InitLogGroup")
         init_container = service.task_defn.add_container(
             "RoundcubeInit",
-            image=image,
+            image=init_image,
             essential=False,
-            entry_point=["sh", "-c"],
-            command=[init_script],
-            environment=init_environment,
+            environment={
+                **init_environment,
+                "ROUNDCUBE_DATA_DIR": ROUNDCUBE_DATA_DIR,
+            },
             secrets=init_secrets,
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="roundcube-init",

@@ -316,128 +316,20 @@ class MailStack(Stack):
             )
         )
 
-        init_script_lines = [
-            "set -eu",
-            f"mkdir -p {CONFIG_MOUNT}/rspamd/dkim {CONFIG_MOUNT}/rspamd/override.d {LE_DIR}",
-            # 1. DKIM private key (selector s1)
-            (
-                f'aws secretsmanager get-secret-value --secret-id "$DKIM_SECRET" '
-                f"--query SecretString --output text | jq -r .secret "
-                f"> {CONFIG_MOUNT}/rspamd/dkim/{DKIM_SELECTOR}.key"
-            ),
-            f"chmod 0600 {CONFIG_MOUNT}/rspamd/dkim/{DKIM_SELECTOR}.key",
-            # 2. postfix-accounts.cf - postmaster + per-user mailboxes.
-            # Each line: <full-address>|{SHA512-CRYPT}<dovecot hash>
-            (
-                "{ "
-                "pm=$(aws secretsmanager get-secret-value "
-                '--secret-id "$POSTMASTER_SECRET" '
-                "--query SecretString --output text | jq -r .secret); "
-                'echo "$POSTMASTER_ADDRESS|{SHA512-CRYPT}$(openssl passwd -6 "$pm")"; '
-                "for user in $MAIL_USERS; do "
-                "pw=$(aws secretsmanager get-secret-value "
-                '--secret-id "mail/users/$user" '
-                "--query SecretString --output text | jq -r .secret); "
-                'echo "$user@$MAIL_DOMAIN|{SHA512-CRYPT}$(openssl passwd -6 "$pw")"; '
-                "done; "
-                f"}} > {CONFIG_MOUNT}/postfix-accounts.cf"
-            ),
-            # 3a. mynetworks override so VPC traffic submits without SASL.
-            (
-                f"printf 'mynetworks = 127.0.0.1/32 [::1]/128 %s\\n' \"$VPC_CIDR\" "
-                f"> {CONFIG_MOUNT}/postfix-main.cf"
-            ),
-            # 3b. master.cf override: re-add permit_mynetworks to the
-            # submission (587) service's client + relay + recipient
-            # restrictions so VPC clients submit on 587 without SASL.
-            # All three default to permit_sasl_authenticated,reject in
-            # DMS; missing any one rejects internal services.
-            (
-                "{ "
-                "printf 'submission/inet/smtpd_client_restrictions="
-                "permit_mynetworks,permit_sasl_authenticated,reject\\n'; "
-                "printf 'submission/inet/smtpd_relay_restrictions="
-                "permit_mynetworks,permit_sasl_authenticated,reject\\n'; "
-                "printf 'submission/inet/smtpd_recipient_restrictions="
-                "permit_mynetworks,permit_sasl_authenticated,reject\\n'; "
-                f"}} > {CONFIG_MOUNT}/postfix-master.cf"
-            ),
-            # 3c. rspamd worker-controller override: bind the HTTP UI to
-            # 0.0.0.0:11334 (default is 127.0.0.1) and skip rspamd's own
-            # password check for VPC traffic. The internal ALB's OIDC
-            # action is the gate.
-            (
-                "{ "
-                "printf 'bind_socket = \"*:%s\";\\n' "
-                f'"{RSPAMD_UI_PORT}"; '
-                'printf \'secure_ip = "%s";\\n\' "$VPC_CIDR"; '
-                f"}} > {CONFIG_MOUNT}/rspamd/override.d/worker-controller.inc"
-            ),
-            # 3d. Dovecot OAUTHBEARER passdb: lets Roundcube authenticate
-            # IMAP/SMTP-submission with an Authentik-issued access
-            # token, no password ever templated. Additive to the
-            # existing passwd-file passdb so mutt / Apple Mail keep
-            # working with passwords. Dovecot validates tokens
-            # locally against Authentik's JWKS - no per-login
-            # round-trip back to Authentik.
-            f"mkdir -p {CONFIG_MOUNT}/jwks",
-            (
-                "curl -sf "
-                '"$AUTHENTIK_ISSUER_BASE/roundcube/jwks/" '
-                f'> "{CONFIG_MOUNT}/jwks/keys.json"'
-            ),
-            # dovecot.cf - single-quoted printf so the literal
-            # `$auth_mechanisms` (a Dovecot variable, not shell)
-            # survives unmangled.
-            (
-                "printf '"
-                "auth_mechanisms = $auth_mechanisms oauthbearer xoauth2\\n"
-                "passdb {\\n"
-                "  driver = oauth2\\n"
-                "  mechanisms = oauthbearer xoauth2\\n"
-                f"  args = {CONFIG_MOUNT}/dovecot-oauth2.conf.ext\\n"
-                "}\\n' "
-                f"> {CONFIG_MOUNT}/dovecot.cf"
-            ),
-            # dovecot-oauth2.conf.ext - %s placeholders get filled
-            # from shell-expanded args so $AUTHENTIK_ISSUER_BASE works,
-            # and %%Lu becomes %Lu (Dovecot's lowercase-full-username
-            # format spec). active_attribute + active_value must both
-            # be empty for local-only JWT validation; setting one
-            # without the other fails Dovecot's startup config check.
-            (
-                "printf '"
-                "local_validation_key_dict = fs:posix:prefix=%s/jwks/\\n"
-                "introspection_mode = local\\n"
-                "issuers = %s/roundcube/\\n"
-                "username_attribute = email\\n"
-                "username_format = %%Lu\\n"
-                "active_attribute =\\n"
-                "active_value =\\n' "
-                f'"{CONFIG_MOUNT}" "$AUTHENTIK_ISSUER_BASE" '
-                f"> {CONFIG_MOUNT}/dovecot-oauth2.conf.ext"
-            ),
-            # 4. Let's Encrypt cert (issue once, renew if <30 days from expiry).
-            f'export LEGO_PATH="{LE_DIR}"',
-            (
-                f'if [ ! -f "$LEGO_PATH/certificates/{fqdn}.crt" ]; then '
-                f'lego --path="$LEGO_PATH" --email="$POSTMASTER_ADDRESS" '
-                f'--domains="$MAIL_FQDN" --dns=route53 --accept-tos run; '
-                "else "
-                f'lego --path="$LEGO_PATH" --email="$POSTMASTER_ADDRESS" '
-                f'--domains="$MAIL_FQDN" --dns=route53 renew --days=30 || true; '
-                "fi"
-            ),
-        ]
-
         init_log_group = logs.LogGroup(self, "InitLogGroup")
         init_container = service.task_defn.add_container(
             "MailInit",
             image=init_image,
             essential=False,
-            entry_point=["sh", "-c"],
-            command=["; ".join(init_script_lines)],
+            entry_point=["/usr/local/bin/init.sh"],
             environment={
+                # Paths + constants the script formerly read from
+                # Python f-strings.
+                "CONFIG_MOUNT": CONFIG_MOUNT,
+                "LEGO_PATH": LE_DIR,
+                "DKIM_SELECTOR": DKIM_SELECTOR,
+                "RSPAMD_UI_PORT": str(RSPAMD_UI_PORT),
+                # Stack inputs / runtime values.
                 "POSTMASTER_ADDRESS": cfg.postmaster_address,
                 "VPC_CIDR": foundation.vpc.vpc_cidr_block,
                 "MAIL_FQDN": fqdn,
@@ -445,11 +337,11 @@ class MailStack(Stack):
                 "MAIL_USERS": " ".join(cfg.users),
                 "DKIM_SECRET": "mail/dkim-private-key",
                 "POSTMASTER_SECRET": "mail/postmaster-password",
-                # Used by the Dovecot OAUTHBEARER passdb config: the
-                # init script fetches Authentik's JWKS for this app
-                # so token signatures can be verified locally.
+                # Authentik issuer base; init pulls JWKS from
+                # <base>/roundcube/jwks/ so Dovecot can verify
+                # OAUTHBEARER tokens locally.
                 "AUTHENTIK_ISSUER_BASE": imports.authentik_issuer_base,
-                # lego picks up these from the standard AWS env
+                # lego + aws-cli pick this up from the standard AWS env.
                 "AWS_REGION": Aws.REGION,
             },
             logging=ecs.LogDrivers.aws_logs(
