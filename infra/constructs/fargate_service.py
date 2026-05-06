@@ -1,6 +1,7 @@
 from typing import Any
 
 from aws_cdk import (
+    Duration,
     Stack,
     aws_ec2 as ec2,
     aws_ecs as ecs,
@@ -24,6 +25,7 @@ class PrivateEgressFargateService(Construct):
         vpc: ec2.IVpc,
         cluster: ecs.ICluster,
         container_kwargs: dict[str, Any],
+        health_check_grace_period: Duration | None = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -45,9 +47,7 @@ class PrivateEgressFargateService(Construct):
             ),
             **container_kwargs,
         )
-        self.service = ecs.FargateService(
-            self,
-            "Service",
+        service_kwargs: dict[str, Any] = dict(
             cluster=cluster,
             task_definition=self.task_defn,
             desired_count=desired_count,
@@ -59,6 +59,19 @@ class PrivateEgressFargateService(Construct):
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
             ),
             enable_execute_command=True,
+        )
+        if health_check_grace_period is not None:
+            # Suppresses ELB health-check failures for the first N
+            # seconds of a fresh task. Useful when the container is a
+            # large bundle (e.g. docker-mailserver bringing up
+            # postfix/dovecot/rspamd/clamav serially) where the ELB
+            # default of 60s before "unhealthy" is tighter than first-
+            # boot needs.
+            service_kwargs["health_check_grace_period"] = health_check_grace_period
+        self.service = ecs.FargateService(
+            self,
+            "Service",
+            **service_kwargs,
         )
         self.task_defn.task_role.add_to_principal_policy(
             iam.PolicyStatement(

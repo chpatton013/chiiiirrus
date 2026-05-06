@@ -246,6 +246,14 @@ class MailStack(Stack):
             min_healthy_percent=cfg.task.min_healthy_percent,
             vpc=foundation.vpc,
             cluster=foundation.cluster,
+            # docker-mailserver brings up postfix, dovecot, rspamd,
+            # and clamav serially; first-boot can take ~90s before
+            # rspamd's :11334 binds. The ELB default of 60s before
+            # marking unhealthy is tighter than first-boot needs and
+            # was tripping the deployment circuit breaker on every
+            # roll. 3 minutes is comfortably wider than the observed
+            # cold-start.
+            health_check_grace_period=Duration.minutes(3),
             container_kwargs=dict(
                 image=image,
                 port_mappings=[
@@ -365,6 +373,50 @@ class MailStack(Stack):
                 'printf \'secure_ip = "%s";\\n\' "$VPC_CIDR"; '
                 f"}} > {CONFIG_MOUNT}/rspamd/override.d/worker-controller.inc"
             ),
+            # 3d. Dovecot OAUTHBEARER passdb: lets Roundcube authenticate
+            # IMAP/SMTP-submission with an Authentik-issued access
+            # token, no password ever templated. Additive to the
+            # existing passwd-file passdb so mutt / Apple Mail keep
+            # working with passwords. Dovecot validates tokens
+            # locally against Authentik's JWKS - no per-login
+            # round-trip back to Authentik.
+            f"mkdir -p {CONFIG_MOUNT}/jwks",
+            (
+                "curl -sf "
+                '"$AUTHENTIK_ISSUER_BASE/roundcube/jwks/" '
+                f'> "{CONFIG_MOUNT}/jwks/keys.json"'
+            ),
+            # dovecot.cf - single-quoted printf so the literal
+            # `$auth_mechanisms` (a Dovecot variable, not shell)
+            # survives unmangled.
+            (
+                "printf '"
+                "auth_mechanisms = $auth_mechanisms oauthbearer xoauth2\\n"
+                "passdb {\\n"
+                "  driver = oauth2\\n"
+                "  mechanisms = oauthbearer xoauth2\\n"
+                f"  args = {CONFIG_MOUNT}/dovecot-oauth2.conf.ext\\n"
+                "}\\n' "
+                f"> {CONFIG_MOUNT}/dovecot.cf"
+            ),
+            # dovecot-oauth2.conf.ext - %s placeholders get filled
+            # from shell-expanded args so $AUTHENTIK_ISSUER_BASE works,
+            # and %%Lu becomes %Lu (Dovecot's lowercase-full-username
+            # format spec). active_attribute + active_value must both
+            # be empty for local-only JWT validation; setting one
+            # without the other fails Dovecot's startup config check.
+            (
+                "printf '"
+                "local_validation_key_dict = fs:posix:prefix=%s/jwks/\\n"
+                "introspection_mode = local\\n"
+                "issuers = %s/roundcube/\\n"
+                "username_attribute = email\\n"
+                "username_format = %%Lu\\n"
+                "active_attribute =\\n"
+                "active_value =\\n' "
+                f'"{CONFIG_MOUNT}" "$AUTHENTIK_ISSUER_BASE" '
+                f"> {CONFIG_MOUNT}/dovecot-oauth2.conf.ext"
+            ),
             # 4. Let's Encrypt cert (issue once, renew if <30 days from expiry).
             f'export LEGO_PATH="{LE_DIR}"',
             (
@@ -393,6 +445,10 @@ class MailStack(Stack):
                 "MAIL_USERS": " ".join(cfg.users),
                 "DKIM_SECRET": "mail/dkim-private-key",
                 "POSTMASTER_SECRET": "mail/postmaster-password",
+                # Used by the Dovecot OAUTHBEARER passdb config: the
+                # init script fetches Authentik's JWKS for this app
+                # so token signatures can be verified locally.
+                "AUTHENTIK_ISSUER_BASE": imports.authentik_issuer_base,
                 # lego picks up these from the standard AWS env
                 "AWS_REGION": Aws.REGION,
             },

@@ -30,9 +30,11 @@ class WebmailImports:
     # Mail server hostname (smtp.<public_domain>) - Roundcube talks to
     # IMAPS:993 + STARTTLS:587 through the public NLB.
     mail_fqdn: str
-    # Authentik issuer base URL + ALB-OIDC redirect URI for Roundcube.
+    # Authentik issuer base URL. Roundcube composes its OAuth2
+    # authorize/token/userinfo URLs from this and runs the OAuth flow
+    # itself (no ALB-OIDC gate), exchanging codes for an access token
+    # used as XOAUTH2 SASL credentials for IMAP and SMTP.
     authentik_issuer_base: str
-    roundcube_redirect_uri: str
 
 
 class WebmailStack(Stack):
@@ -74,6 +76,21 @@ class WebmailStack(Stack):
             "ROUNDCUBEMAIL_DB_TYPE": "sqlite",
             "ROUNDCUBEMAIL_DB_DIR": f"{ROUNDCUBE_DATA_DIR}/db",
             "ROUNDCUBEMAIL_PLUGINS": "archive,zipdownload,managesieve",
+        }
+        # Init-only env: Authentik issuer base. The OIDC client_id /
+        # client_secret are injected by ECS as task-launch secrets
+        # (see init_secrets below) so the init container can template
+        # them directly without an AWS API call.
+        init_environment = {
+            "AUTHENTIK_ISSUER_BASE": imports.authentik_issuer_base,
+        }
+        init_secrets = {
+            "OAUTH_CLIENT_ID": ecs.Secret.from_secrets_manager(
+                oidc_secret, "client_id"
+            ),
+            "OAUTH_CLIENT_SECRET": ecs.Secret.from_secrets_manager(
+                oidc_secret, "client_secret"
+            ),
         }
 
         service = PrivateEgressFargateService(
@@ -153,8 +170,8 @@ class WebmailStack(Stack):
 
         init_script = (
             "set -eu\n"
-            f"mkdir -p {ROUNDCUBE_DATA_DIR}/db\n"
-            # Re-create the DB if it's absent or doesn't have a
+            f"mkdir -p {ROUNDCUBE_DATA_DIR}/db {ROUNDCUBE_DATA_DIR}/config\n"
+            # 1. Re-create the DB if it's absent or doesn't have a
             # `session` table. Otherwise leave it alone (preserves
             # accumulated user prefs, contacts, etc.).
             "php -r '\n"
@@ -183,8 +200,31 @@ class WebmailStack(Stack):
             '    echo "schema present\\n";\n'
             "  }\n"
             "'\n"
+            # 2. Templated oauth2 config so Roundcube can run the
+            # OAuth flow itself against Authentik. ECS injects the
+            # client_id/secret as task-launch secrets (init_secrets)
+            # so they never cross CFN parameters. The leading "\\$"
+            # in the heredoc tells the shell to emit a literal "$" -
+            # PHP needs "$config[...]" to survive.
+            f"cat > {ROUNDCUBE_DATA_DIR}/config/oauth.inc.php <<PHP\n"
+            "<?php\n"
+            "\\$config['oauth_provider'] = 'generic';\n"
+            "\\$config['oauth_provider_name'] = 'Authentik';\n"
+            "\\$config['oauth_client_id'] = '$OAUTH_CLIENT_ID';\n"
+            "\\$config['oauth_client_secret'] = '$OAUTH_CLIENT_SECRET';\n"
+            "\\$config['oauth_auth_uri'] = '$AUTHENTIK_ISSUER_BASE/authorize/';\n"
+            "\\$config['oauth_token_uri'] = '$AUTHENTIK_ISSUER_BASE/token/';\n"
+            "\\$config['oauth_identity_uri'] = '$AUTHENTIK_ISSUER_BASE/userinfo/';\n"
+            "\\$config['oauth_scope'] = 'openid profile email offline_access';\n"
+            "\\$config['oauth_pkce'] = 'S256';\n"
+            "\\$config['oauth_identity_fields'] = ['email'];\n"
+            "\\$config['imap_auth_type'] = 'XOAUTH2';\n"
+            "\\$config['smtp_auth_type'] = 'XOAUTH2';\n"
+            "\\$config['login_autocomplete'] = 0;\n"
+            "PHP\n"
             f"chown -R www-data:www-data {ROUNDCUBE_DATA_DIR}\n"
             f"chmod 0640 {ROUNDCUBE_DATA_DIR}/db/sqlite.db\n"
+            f"chmod 0640 {ROUNDCUBE_DATA_DIR}/config/oauth.inc.php\n"
         )
         init_log_group = logs.LogGroup(self, "InitLogGroup")
         init_container = service.task_defn.add_container(
@@ -193,6 +233,8 @@ class WebmailStack(Stack):
             essential=False,
             entry_point=["sh", "-c"],
             command=[init_script],
+            environment=init_environment,
+            secrets=init_secrets,
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="roundcube-init",
                 log_group=init_log_group,
@@ -249,20 +291,10 @@ class WebmailStack(Stack):
             ec2.Port.tcp(ROUNDCUBE_HTTP_PORT),
             "ALB to webmail",
         )
+        # Plain forward; Roundcube's oauth2 plugin runs the OAuth flow
+        # itself end-to-end so anonymous users hitting the apex are
+        # redirected to Authentik by Roundcube, not by the ALB.
         alb.https_listener.add_action(
-            "OidcGate",
-            action=elbv2.ListenerAction.authenticate_oidc(
-                # Authentik exposes one shared OAuth2 endpoint per
-                # category and disambiguates by client_id; the issuer
-                # is the per-application URL (carries the slug).
-                authorization_endpoint=f"{imports.authentik_issuer_base}/authorize/",
-                token_endpoint=f"{imports.authentik_issuer_base}/token/",
-                user_info_endpoint=f"{imports.authentik_issuer_base}/userinfo/",
-                issuer=f"{imports.authentik_issuer_base}/roundcube/",
-                client_id=oidc_secret.secret_value_from_json(
-                    "client_id"
-                ).unsafe_unwrap(),
-                client_secret=oidc_secret.secret_value_from_json("client_secret"),
-                next=elbv2.ListenerAction.forward([target_group]),
-            ),
+            "Forward",
+            action=elbv2.ListenerAction.forward([target_group]),
         )

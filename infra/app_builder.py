@@ -33,7 +33,9 @@ def build_app(
     rspamd_redirect_uri = f"https://{rspamd_fqdn}/oauth2/idpresponse"
     mail_fqdn = f"{cfg.mail.subdomain}.{cfg.foundation.public_domain}"
     roundcube_fqdn = f"{cfg.webmail.subdomain}.{cfg.foundation.public_domain}"
-    roundcube_redirect_uri = f"https://{roundcube_fqdn}/oauth2/idpresponse"
+    # Roundcube 1.6's oauth2 plugin expects the IDP to redirect back to
+    # the bare Roundcube root with `code` + `state` query params.
+    roundcube_redirect_uri = f"https://{roundcube_fqdn}/index.php/login/oauth"
 
     # CloudFront / ACM-for-CloudFront only live in us-east-1, so SiteStack
     # is pinned there. Everything else stays in the app's primary region;
@@ -132,7 +134,6 @@ def build_app(
             mail=mail,
             mail_fqdn=mail_fqdn,
             authentik_issuer_base=authentik_issuer_base,
-            roundcube_redirect_uri=roundcube_redirect_uri,
         ),
         env=env,
     )
