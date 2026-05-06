@@ -7,6 +7,7 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_efs as efs,
     aws_elasticloadbalancingv2 as elbv2,
+    aws_logs as logs,
     aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
@@ -140,6 +141,78 @@ class WebmailStack(Stack):
         )
 
         ###
+        # Init container - idempotently load the Roundcube sqlite schema
+        # before the main container starts. The upstream image's
+        # entrypoint only runs schema init when sqlite.db is absent;
+        # on a fresh EFS access point the file gets touched (or is
+        # left empty by a previous failed boot), the entrypoint sees
+        # something there, skips schema load, and the main container
+        # then crashes on every request with `no such table: session`.
+        # This init owns schema (re-)loading + perms so a first deploy
+        # converges on its own.
+
+        init_script = (
+            "set -eu\n"
+            f"mkdir -p {ROUNDCUBE_DATA_DIR}/db\n"
+            # Re-create the DB if it's absent or doesn't have a
+            # `session` table. Otherwise leave it alone (preserves
+            # accumulated user prefs, contacts, etc.).
+            "php -r '\n"
+            f'  $f = "{ROUNDCUBE_DATA_DIR}/db/sqlite.db";\n'
+            "  $need_init = !file_exists($f);\n"
+            "  if (!$need_init) {\n"
+            "    try {\n"
+            '      $db = new PDO("sqlite:" . $f);\n'
+            "      $r = $db->query(\n"
+            '        "SELECT name FROM sqlite_master "\n'
+            '        . "WHERE type=\\"table\\" AND name=\\"session\\""\n'
+            "      )->fetch();\n"
+            "      $need_init = !$r;\n"
+            "    } catch (Throwable $e) {\n"
+            "      $need_init = true;\n"
+            "    }\n"
+            "  }\n"
+            "  if ($need_init) {\n"
+            "    @unlink($f);\n"
+            '    $db = new PDO("sqlite:" . $f);\n'
+            "    $db->exec(\n"
+            '      file_get_contents("/var/www/html/SQL/sqlite.initial.sql")\n'
+            "    );\n"
+            '    echo "schema loaded\\n";\n'
+            "  } else {\n"
+            '    echo "schema present\\n";\n'
+            "  }\n"
+            "'\n"
+            f"chown -R www-data:www-data {ROUNDCUBE_DATA_DIR}\n"
+            f"chmod 0640 {ROUNDCUBE_DATA_DIR}/db/sqlite.db\n"
+        )
+        init_log_group = logs.LogGroup(self, "InitLogGroup")
+        init_container = service.task_defn.add_container(
+            "RoundcubeInit",
+            image=image,
+            essential=False,
+            entry_point=["sh", "-c"],
+            command=[init_script],
+            logging=ecs.LogDrivers.aws_logs(
+                stream_prefix="roundcube-init",
+                log_group=init_log_group,
+            ),
+        )
+        init_container.add_mount_points(
+            ecs.MountPoint(
+                source_volume="roundcube",
+                container_path=ROUNDCUBE_DATA_DIR,
+                read_only=False,
+            )
+        )
+        service.container.add_container_dependencies(
+            ecs.ContainerDependency(
+                container=init_container,
+                condition=ecs.ContainerDependencyCondition.SUCCESS,
+            )
+        )
+
+        ###
         # Public ALB at mail.<public_domain> with Authentik OIDC gate.
 
         alb = PublicHttpAlb(
@@ -179,13 +252,12 @@ class WebmailStack(Stack):
         alb.https_listener.add_action(
             "OidcGate",
             action=elbv2.ListenerAction.authenticate_oidc(
-                authorization_endpoint=(
-                    f"{imports.authentik_issuer_base}/roundcube/authorize/"
-                ),
-                token_endpoint=f"{imports.authentik_issuer_base}/roundcube/token/",
-                user_info_endpoint=(
-                    f"{imports.authentik_issuer_base}/roundcube/userinfo/"
-                ),
+                # Authentik exposes one shared OAuth2 endpoint per
+                # category and disambiguates by client_id; the issuer
+                # is the per-application URL (carries the slug).
+                authorization_endpoint=f"{imports.authentik_issuer_base}/authorize/",
+                token_endpoint=f"{imports.authentik_issuer_base}/token/",
+                user_info_endpoint=f"{imports.authentik_issuer_base}/userinfo/",
                 issuer=f"{imports.authentik_issuer_base}/roundcube/",
                 client_id=oidc_secret.secret_value_from_json(
                     "client_id"

@@ -528,13 +528,12 @@ class MailStack(Stack):
         rspamd_alb.https_listener.add_action(
             "RspamdOidcGate",
             action=elbv2.ListenerAction.authenticate_oidc(
-                authorization_endpoint=(
-                    f"{imports.authentik_issuer_base}/rspamd/authorize/"
-                ),
-                token_endpoint=f"{imports.authentik_issuer_base}/rspamd/token/",
-                user_info_endpoint=(
-                    f"{imports.authentik_issuer_base}/rspamd/userinfo/"
-                ),
+                # Authentik exposes one shared OAuth2 endpoint per
+                # category and disambiguates by client_id; the issuer
+                # is the per-application URL (carries the slug).
+                authorization_endpoint=f"{imports.authentik_issuer_base}/authorize/",
+                token_endpoint=f"{imports.authentik_issuer_base}/token/",
+                user_info_endpoint=f"{imports.authentik_issuer_base}/userinfo/",
                 issuer=f"{imports.authentik_issuer_base}/rspamd/",
                 client_id=rspamd_oidc_secret.secret_value_from_json(
                     "client_id"
