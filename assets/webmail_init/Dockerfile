@@ -1,14 +1,23 @@
 # Init container for the Roundcube Fargate task.
 #
-# Layered on the Roundcube image so init.sh can talk to sqlite via PHP
-# and read /var/www/html/SQL/sqlite.initial.sql for first-boot schema
-# load. ROUNDCUBE_VERSION is wired through from config.toml's
-# [webmail].image_version via the WebmailStack DockerImageAsset
-# build_args, so the init's PHP/SQL stays version-locked to the main
-# container's PHP/SQL.
+# Alpine + sqlite3 CLI + the Roundcube schema baked at build time.
+# We deliberately don't FROM roundcube/roundcubemail here: the only
+# upstream artifact we need is SQL/sqlite.initial.sql, and pulling the
+# whole image from Docker Hub at synth time blew through the
+# unauthenticated rate limit on multi-deploy days. Curling the single
+# SQL file from GitHub instead is independently rate-limited and
+# version-locked via the ROUNDCUBE_SOURCE_VERSION build arg (the bare
+# source tag without the docker image's "-apache" / "-fpm" suffix).
 
-ARG ROUNDCUBE_VERSION=1.6.10-apache
-FROM roundcube/roundcubemail:${ROUNDCUBE_VERSION}
+FROM alpine:3.19
+
+ARG ROUNDCUBE_SOURCE_VERSION=1.6.10
+
+RUN apk add --no-cache ca-certificates curl jq sqlite \
+    && mkdir -p /usr/local/share/roundcube \
+    && curl -fsSL \
+       "https://raw.githubusercontent.com/roundcube/roundcubemail/${ROUNDCUBE_SOURCE_VERSION}/SQL/sqlite.initial.sql" \
+       -o /usr/local/share/roundcube/sqlite.initial.sql
 
 COPY init.sh /usr/local/bin/init.sh
 RUN chmod +x /usr/local/bin/init.sh

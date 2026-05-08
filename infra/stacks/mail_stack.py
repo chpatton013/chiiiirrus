@@ -337,9 +337,17 @@ class MailStack(Stack):
                 "MAIL_USERS": " ".join(cfg.users),
                 "DKIM_SECRET": "mail/dkim-private-key",
                 "POSTMASTER_SECRET": "mail/postmaster-password",
-                # Authentik issuer base; init pulls JWKS from
-                # <base>/roundcube/jwks/ so Dovecot can verify
-                # OAUTHBEARER tokens locally.
+                # Roundcube's Authentik OIDC client - same secret
+                # WebmailStack uses. The mail-init script reads its
+                # client_id + client_secret to template Dovecot's
+                # oauth2 conf.ext, which lets Dovecot authenticate
+                # to Authentik's introspection endpoint when verifying
+                # OAUTHBEARER tokens at IMAP login time.
+                "ROUNDCUBE_OIDC_SECRET": "authentik/oidc/roundcube",
+                # Authentik issuer base; init composes
+                # <base>/introspect/ as the OAUTHBEARER validation
+                # endpoint and <base>/roundcube/ as the expected
+                # token issuer.
                 "AUTHENTIK_ISSUER_BASE": imports.authentik_issuer_base,
                 # lego + aws-cli pick this up from the standard AWS env.
                 "AWS_REGION": Aws.REGION,
@@ -359,6 +367,10 @@ class MailStack(Stack):
         # Init grants: secrets + Route53 (for lego DNS-01)
         dkim_secret.grant_read(service.task_defn.task_role)
         postmaster_secret.grant_read(service.task_defn.task_role)
+        roundcube_oidc_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "RoundcubeOidcSecret", "authentik/oidc/roundcube"
+        )
+        roundcube_oidc_secret.grant_read(service.task_defn.task_role)
         if cfg.users:
             service.task_defn.task_role.add_to_principal_policy(
                 iam.PolicyStatement(

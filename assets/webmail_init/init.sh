@@ -5,7 +5,7 @@
 # Idempotent. Runs on every task start before the main Roundcube
 # container; the main container has a SUCCESS dependency on this one.
 #
-# Two responsibilities:
+# Three responsibilities:
 #
 #   1. Bootstrap the sqlite DB schema. The upstream Roundcube image's
 #      entrypoint runs schema init only when sqlite.db is absent; on
@@ -17,6 +17,11 @@
 #   2. Template /var/roundcube/config/oauth.inc.php so Roundcube can
 #      run the OAuth2 flow against Authentik (replacing the IMAP-
 #      password login with end-to-end OAUTHBEARER).
+#
+#   3. Drop a sentinel file at /var/roundcube/config/include.php that
+#      the main container's entrypoint hook (see below) sources, so
+#      our oauth config gets loaded by Roundcube even though
+#      Roundcube itself only reads /var/www/html/config/.
 #
 # Required env (set by infra/stacks/webmail_stack.py on the init container):
 #   ROUNDCUBE_DATA_DIR    - EFS mount path inside the container
@@ -31,41 +36,35 @@ set -eu
 
 mkdir -p "$ROUNDCUBE_DATA_DIR/db" "$ROUNDCUBE_DATA_DIR/config"
 
-# 1. Sqlite schema bootstrap. PHP can talk to sqlite via PDO so we
-# don't need the sqlite3 CLI in this image. shellcheck doesn't know
-# the body is PHP, not shell, so silence its $-expansion warning.
-# shellcheck disable=SC2016
-php -r '
-  $f = getenv("ROUNDCUBE_DATA_DIR") . "/db/sqlite.db";
-  $need_init = !file_exists($f);
-  if (!$need_init) {
-    try {
-      $db = new PDO("sqlite:" . $f);
-      $r = $db->query(
-        "SELECT name FROM sqlite_master WHERE type=\"table\" AND name=\"session\""
-      )->fetch();
-      $need_init = !$r;
-    } catch (Throwable $e) {
-      $need_init = true;
-    }
-  }
-  if ($need_init) {
-    @unlink($f);
-    $db = new PDO("sqlite:" . $f);
-    $db->exec(
-      file_get_contents("/var/www/html/SQL/sqlite.initial.sql")
-    );
-    echo "schema loaded\n";
-  } else {
-    echo "schema present\n";
-  }
-'
+# 1. Sqlite schema bootstrap. If the file is missing or has no
+# `session` table, drop it and reload from the schema we baked into
+# the image at build time.
+db="$ROUNDCUBE_DATA_DIR/db/sqlite.db"
+query="SELECT 1 FROM sqlite_master WHERE type='table' AND name='session' LIMIT 1"
+if [ ! -f "$db" ] || ! sqlite3 "$db" "$query" | grep -q 1; then
+  rm -f "$db"
+  sqlite3 "$db" </usr/local/share/roundcube/sqlite.initial.sql
+  echo "schema loaded"
+else
+  echo "schema present"
+fi
 
 # 2. Roundcube OAuth2 config. Single-quoted heredoc so PHP `$config`
 # references survive unmangled; values get inlined from the env vars
 # above before we write the file.
+#
+# The first PHP block fakes \$_SERVER so Roundcube sees the request
+# as HTTPS even though Apache only speaks plain HTTP behind the
+# TLS-terminating ALB. Without it, Roundcube generates an
+# `http://...` redirect_uri for the OAuth flow, which Authentik
+# strict-matches against the registered `https://...` URL and
+# rejects with "missing, invalid, or mismatching redirection URI".
 cat >"$ROUNDCUBE_DATA_DIR/config/oauth.inc.php" <<PHP
 <?php
+if ((\$_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https') {
+    \$_SERVER['HTTPS'] = 'on';
+    \$_SERVER['SERVER_PORT'] = 443;
+}
 \$config['oauth_provider'] = 'generic';
 \$config['oauth_provider_name'] = 'Authentik';
 \$config['oauth_client_id'] = '$OAUTH_CLIENT_ID';
@@ -81,7 +80,9 @@ cat >"$ROUNDCUBE_DATA_DIR/config/oauth.inc.php" <<PHP
 \$config['login_autocomplete'] = 0;
 PHP
 
-# Ownership + perms so the apache user can read both files.
-chown -R www-data:www-data "$ROUNDCUBE_DATA_DIR"
+# Ownership + perms so the apache user (uid 33) in the main container
+# can read both files. The init container has no www-data; chown by
+# numeric uid:gid to match what apache uses inside Roundcube.
+chown -R 33:33 "$ROUNDCUBE_DATA_DIR"
 chmod 0640 "$ROUNDCUBE_DATA_DIR/db/sqlite.db"
 chmod 0640 "$ROUNDCUBE_DATA_DIR/config/oauth.inc.php"

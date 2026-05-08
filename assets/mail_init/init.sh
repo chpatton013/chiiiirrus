@@ -88,10 +88,18 @@ EOF
 # password ever templated. Additive to the existing passwd-file
 # passdb so mutt / Apple Mail keep working with passwords.
 #
-# JWKS is fetched on every init run (cheap) so signing-key rotation
-# at Authentik propagates without manual intervention.
-curl -sf "$AUTHENTIK_ISSUER_BASE/roundcube/jwks/" \
-  >"$CONFIG_MOUNT/jwks/keys.json"
+# Uses Authentik's RFC 7662 introspection endpoint (one HTTPS round-
+# trip per IMAP login). Local JWT validation would avoid the round-
+# trip but Dovecot 2.3.19's dict drivers don't include the `fs:posix`
+# variant the JWKS-on-disk pattern needs - introspection is the only
+# fully-supported path on this image.
+rm -rf "$CONFIG_MOUNT/jwks"
+client_id=$(aws secretsmanager get-secret-value \
+  --secret-id "$ROUNDCUBE_OIDC_SECRET" \
+  --query SecretString --output text | jq -r .client_id)
+client_secret=$(aws secretsmanager get-secret-value \
+  --secret-id "$ROUNDCUBE_OIDC_SECRET" \
+  --query SecretString --output text | jq -r .client_secret)
 
 # Single-quoted heredoc - `$auth_mechanisms` is a Dovecot variable,
 # not a shell var, and must reach the file unmangled.
@@ -104,17 +112,20 @@ passdb {
 }
 EOF
 
-# active_attribute and active_value must both be empty for local-only
-# JWT validation; Dovecot rejects the config if one is set without
-# the other. %Lu = lowercase full username (Dovecot format spec).
+# dovecot-oauth2.conf.ext: tells Dovecot's oauth2 passdb to call
+# Authentik's RFC 7662 introspection endpoint with the access token
+# and check the `active` claim in the response. %Lu = lowercase full
+# username (Dovecot format spec).
 cat >"$CONFIG_MOUNT/dovecot-oauth2.conf.ext" <<EOF
-local_validation_key_dict = fs:posix:prefix=$CONFIG_MOUNT/jwks/
-introspection_mode = local
+introspection_url = $AUTHENTIK_ISSUER_BASE/introspect/
+introspection_mode = post
+client_id = $client_id
+client_secret = $client_secret
 issuers = $AUTHENTIK_ISSUER_BASE/roundcube/
 username_attribute = email
 username_format = %Lu
-active_attribute =
-active_value =
+active_attribute = active
+active_value = true
 EOF
 
 # 4. Let's Encrypt cert. Issue on first deploy, renew if <30 days

@@ -116,6 +116,14 @@ class WebmailStack(Stack):
                     ),
                 ],
                 environment=environment,
+                # Image default CMD (apache2-foreground) is left as-is.
+                # The upstream entrypoint (docker-entrypoint.sh) only
+                # runs its config-generation logic when $1 starts with
+                # apache2 / php-fpm / bin, so any CMD override breaks
+                # config setup. The entrypoint already includes any
+                # `/var/roundcube/config/*.php` files in the generated
+                # config.docker.inc.php, which is exactly where our
+                # init container writes oauth.inc.php.
             ),
         )
         service.grant_pull_through_cache(foundation.dockerhub_mirror_namespace)
@@ -168,12 +176,17 @@ class WebmailStack(Stack):
         # request. Logic lives in assets/webmail_init/init.sh; this
         # block just wires the env vars + secrets the script reads.
 
+        # Strip the docker image tag suffix (e.g. "-apache", "-fpm")
+        # to recover the bare upstream source version, which is the
+        # tag used in the roundcubemail GitHub repo and what the
+        # Dockerfile uses to fetch sqlite.initial.sql.
+        roundcube_source_version = cfg.image_version.split("-", 1)[0]
         init_image = ecs.ContainerImage.from_docker_image_asset(
             ecr_assets.DockerImageAsset(
                 self,
                 "RoundcubeInitImage",
                 directory=str(assets.docker_path("webmail_init")),
-                build_args={"ROUNDCUBE_VERSION": cfg.image_version},
+                build_args={"ROUNDCUBE_SOURCE_VERSION": roundcube_source_version},
                 platform=ecr_assets.Platform.LINUX_AMD64,
             )
         )
