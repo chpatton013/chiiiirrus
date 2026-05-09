@@ -112,7 +112,7 @@ class FoundationStack(Stack):
         backup_vault = backup.BackupVault(
             self,
             "BackupVault",
-            backup_vault_name="openclaw-backups",
+            backup_vault_name=f"{cfg.project_name}-backups",
             removal_policy=RemovalPolicy.RETAIN,
         )
 

@@ -1,10 +1,5 @@
 version: 1
 metadata:
-  # Bump this label when the !Env-resolved redirect URI changes - the
-  # YAML body alone otherwise hashes the same and Authentik skips
-  # re-applying.
-  labels:
-    openclaw/redirect-uri-rev: "v2"
   name: Roundcube webmail OIDC application
 entries:
   - model: authentik_core.group

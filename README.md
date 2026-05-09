@@ -1,6 +1,6 @@
 # Personal Cloud Deployment
 
-[![test](https://github.com/chpatton013/openclaw/actions/workflows/test.yml/badge.svg)](https://github.com/chpatton013/openclaw/actions/workflows/test.yml)
+[![test](https://github.com/chpatton013/chiiiirrus/actions/workflows/test.yml/badge.svg)](https://github.com/chpatton013/chiiiirrus/actions/workflows/test.yml)
 
 This repo hosts the infrastructure-as-code (IaC) for my personal cloud
 deployment, which is split across AWS (in progress) and a private homelab
@@ -401,7 +401,8 @@ DAG. But they can never declare a cyclical dependency.
           ports 25 / 465 / 587 / 993 fronted by a public NLB
         - Storage: encrypted EFS with three access points
           (`mail`, `config`, `clamav`); daily/weekly snapshots into
-          the `openclaw-backups` `BackupVault` from FoundationStack
+          the shared `BackupVault` from FoundationStack
+          (`<foundation.project_name>-backups`)
         - Init container (one task, several jobs, each idempotent):
             1. fetches the DKIM private key from
                `mail/dkim-private-key` onto EFS at the rspamd-expected

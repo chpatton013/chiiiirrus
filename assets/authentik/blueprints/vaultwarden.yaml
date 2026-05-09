@@ -19,9 +19,9 @@ entries:
   - model: authentik_providers_oauth2.scopemapping
     id: vaultwarden-email-scope
     identifiers:
-      managed: openclaw-vaultwarden-email-scope
+      managed: vaultwarden-email-scope
     attrs:
-      name: "OpenClaw Vaultwarden: email + email_verified"
+      name: "Vaultwarden: email + email_verified"
       scope_name: email
       expression: |
         return {

@@ -1,4 +1,8 @@
 [foundation]
+# Used as the brand string for AWS resource names (e.g. the shared
+# BackupVault is `<project_name>-backups`). Decoupled from the repo
+# name on purpose so forks can pick different identifiers.
+project_name = "chiiiirs"
 public_domain = "chiiiirs.com"
 private_domain = "chiiiirs.net"
 
