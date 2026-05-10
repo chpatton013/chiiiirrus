@@ -18,5 +18,10 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@matrix-org/matrix-sdk-crypto-nodejs"
+    ]
   }
 }

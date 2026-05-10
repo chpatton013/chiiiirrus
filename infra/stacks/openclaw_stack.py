@@ -316,16 +316,32 @@ class OpenClawStack(Stack):
             f"unzip -oq /tmp/openclaw_bot.zip -d {MATRIX_BOT_INSTALL_DIR!s}",
             f"chown -R ubuntu:ubuntu {MATRIX_BOT_INSTALL_DIR!s}",
             f"chmod +x {MATRIX_BOT_INSTALL_DIR!s}/scripts/prestart",
-            # pnpm is user-installed at ~/.local/share/pnpm/pnpm; the
+            # pnpm is user-installed at ~/.local/share/pnpm/bin; the
             # PATH export lives in ~/.bashrc which non-interactive
             # shells skip via the early `*i*) ;; *) return ;;`
             # guard, so call the binary by absolute path.
-            " ".join(
+            #
+            # @matrix-org/matrix-sdk-crypto-nodejs has a postinstall
+            # script that downloads the platform-specific native
+            # binding (.node file). pnpm v11's onlyBuiltDependencies
+            # gate doesn't honor the package.json field
+            # non-interactively, so run the download script
+            # explicitly after install instead.
+            #
+            # Using `tsc` directly instead of `pnpm run build` -
+            # `pnpm run` does an extra dep-status round-trip that
+            # crashes against the readonly node_modules layout pnpm
+            # leaves on disk in some configurations.
+            "sudo -iu ubuntu bash -c '"
+            + " && ".join(
                 [
-                    "sudo -iu ubuntu",
-                    f"bash -c 'cd {MATRIX_BOT_INSTALL_DIR!s} && ~/.local/share/pnpm/pnpm install --frozen-lockfile && ~/.local/share/pnpm/pnpm run build'",
+                    f"cd {MATRIX_BOT_INSTALL_DIR!s}",
+                    "~/.local/share/pnpm/bin/pnpm install --frozen-lockfile",
+                    "(cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js)",
+                    "./node_modules/.bin/tsc",
                 ]
-            ),
+            )
+            + "'",
             "install -d -m 0755 /home/ubuntu/.config/systemd/user",
             "\n".join(
                 [
