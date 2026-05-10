@@ -195,14 +195,14 @@ async function main(): Promise<void> {
     const content = event.content;
     if (!content || content.msgtype !== "m.text") return;
 
-    // E2E enforcement: refuse plaintext. The room.message event the
-    // client emits for an encrypted room is the *decrypted* event,
-    // with `event.encrypted == true` (matrix-bot-sdk surfaces this
-    // flag on decrypted events). A plaintext message in the control
-    // room means either the room isn't E2E or someone bypassed it -
-    // either way, reject.
-    if (!event.encrypted) {
-      log("warn", `refusing plaintext message ${event.event_id}`);
+    // E2E enforcement: matrix-bot-sdk doesn't carry a per-event
+    // "this was encrypted" flag on decrypted room.message events,
+    // so we anchor on the room's encryption state instead. We
+    // assert at startup that the control room IS encrypted; if
+    // someone later disables encryption on the room, this re-check
+    // catches it.
+    if (!(await client.crypto.isRoomEncrypted(roomId))) {
+      log("warn", `refusing message in unencrypted room ${roomId}`);
       await client.replyText(
         roomId,
         event,
@@ -240,6 +240,11 @@ async function main(): Promise<void> {
   });
 
   await client.start();
+  if (!(await client.crypto.isRoomEncrypted(controlRoomId))) {
+    throw new Error(
+      `control room ${controlRoomId} is not encrypted; refusing to run`,
+    );
+  }
   log("info", `bot running; user_id=${await client.getUserId()}`);
 }
 
