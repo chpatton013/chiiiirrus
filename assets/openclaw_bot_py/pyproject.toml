@@ -1,0 +1,18 @@
+[project]
+name = "openclaw-matrix-bot-py"
+version = "0.1.0"
+description = "Python implementation of the OpenClaw Matrix control bot. Parallel to the TypeScript bot; uses mautrix-python for full cross-signing + verification support."
+requires-python = ">=3.11"
+dependencies = [
+  # mautrix-python ships a high-level client framework + crypto.
+  # `crypto` extra pulls in python-olm (requires system libolm3).
+  "mautrix[crypto]>=0.20.8",
+  "aiohttp>=3.9",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -64,7 +64,7 @@ class MatrixImports:
 # into Secrets Manager.
 _BOOTSTRAP_SCRIPT = r"""
 set -euo pipefail
-BOT_USERNAME=openclaw-bot-2
+BOT_USERNAME=openclaw-bot-3
 BOT_PASSWORD="$(head -c 32 /dev/urandom | base64 | tr -d '\n=+/')"
 
 python -m synapse._scripts.register_new_matrix_user \
@@ -603,7 +603,7 @@ class MatrixStack(Stack):
             self,
             "BotAccountBootstrap",
             service_token=bootstrap_provider.service_token,
-            properties={"Trigger": "v2"},
+            properties={"Trigger": "v3"},
         )
         # Synapse must be live before the bootstrap task can hit
         # `/_synapse/admin/v1/register` and `/_matrix/client/v3/login`.
