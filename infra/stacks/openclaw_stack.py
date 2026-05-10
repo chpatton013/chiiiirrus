@@ -303,7 +303,13 @@ class OpenClawStack(Stack):
             # E2E + sync state lives under /data/matrix-bot on EFS so
             # device verification persists across instance
             # replacements.
-            "apt-get install -y unzip awscli python3",
+            "apt-get install -y unzip python3",
+            # AWS CLI v2 from the official installer (Ubuntu 24.04
+            # dropped the `awscli` apt package in favor of the snap;
+            # the standalone installer is the lighter dependency).
+            'curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip',
+            "unzip -oq /tmp/awscliv2.zip -d /tmp",
+            "/tmp/aws/install --update",
             f"mkdir -p {MATRIX_BOT_INSTALL_DIR!s} {MATRIX_BOT_DIR!s}",
             f"chown -R ubuntu:ubuntu {MATRIX_BOT_DIR!s}",
             f"aws s3 cp s3://{bot_asset.s3_bucket_name}/{bot_asset.s3_object_key} /tmp/openclaw_bot.zip",
