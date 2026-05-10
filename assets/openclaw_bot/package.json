@@ -1,6 +1,6 @@
 {
   "name": "openclaw-matrix-bot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Bridges a Matrix control room to the loopback OpenClaw gateway with strict allowlist + E2E enforcement.",
@@ -9,8 +9,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "matrix-bot-sdk": "^0.8.0",
-    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0"
+    "matrix-js-sdk": "^41.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -18,10 +17,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@matrix-org/matrix-sdk-crypto-nodejs"
-    ]
   }
 }
