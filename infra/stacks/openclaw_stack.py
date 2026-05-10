@@ -40,10 +40,11 @@ MATRIX_BOT_INSTALL_DIR = pathlib.Path("/opt/openclaw-matrix-bot")
 MATRIX_BOT_RUNTIME_DIR = pathlib.Path("/run/openclaw-matrix-bot")
 MATRIX_BOT_TOKEN_SECRET = "matrix/openclaw-bot-token"
 MATRIX_BOT_CONTROL_ROOM_PARAM = "/openclaw-matrix-bot/control-room-id"
-# Tentative path: openclaw onboard --gateway-auth token writes the
-# token here in current versions. Override the systemd unit's
-# Environment= if the path differs in future openclaw releases.
-MATRIX_BOT_GATEWAY_TOKEN_PATH = OPENCLAW_STATE_DIR / "gateway-token"
+# OpenClaw stores its gateway auth token inside its main state JSON
+# file at `gateway.auth.token` rather than as a standalone file.
+# The bot's prestart helper reads this state file and extracts the
+# token into a sibling runtime file the bot consumes.
+OPENCLAW_STATE_FILE = OPENCLAW_STATE_DIR / "openclaw.json"
 NODESOURCE_KEY_URI = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
 NODESOURCE_REPO_URI = "https://deb.nodesource.com/node_24.x"
 NODESOURCE_KEY_PATH = pathlib.Path("/etc/apt/keyrings/nodesource.gpg")
@@ -360,10 +361,11 @@ class OpenClawStack(Stack):
                     f"Environment=ALLOWED_SENDER={imports.allowed_sender}",
                     f"Environment=MATRIX_BOT_DATA_DIR={MATRIX_BOT_DIR!s}",
                     "Environment=OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789",
-                    f"Environment=OPENCLAW_GATEWAY_TOKEN_FILE={MATRIX_BOT_GATEWAY_TOKEN_PATH!s}",
+                    "Environment=OPENCLAW_GATEWAY_TOKEN_FILE=%t/openclaw-matrix-bot/gateway-token",
                     "Environment=BOT_ACCESS_TOKEN_FILE=%t/openclaw-matrix-bot/access-token",
                     f"Environment=BOT_TOKEN_SECRET_ID={MATRIX_BOT_TOKEN_SECRET}",
                     f"Environment=CONTROL_ROOM_PARAM={MATRIX_BOT_CONTROL_ROOM_PARAM}",
+                    f"Environment=OPENCLAW_STATE_FILE={OPENCLAW_STATE_FILE!s}",
                     "EnvironmentFile=-%t/openclaw-matrix-bot/env",
                     f"ExecStartPre={MATRIX_BOT_INSTALL_DIR!s}/scripts/prestart",
                     f"ExecStart=/usr/bin/node {MATRIX_BOT_INSTALL_DIR!s}/dist/index.js",

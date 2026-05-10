@@ -1,17 +1,23 @@
 #!/bin/bash
 #
 # systemd ExecStartPre helper for openclaw-matrix-bot.service.
-# Fetches the bot's Matrix access token from Secrets Manager and the
-# control-room ID from SSM Parameter Store, writing them to files
-# under $RUNTIME_DIRECTORY (set by systemd for the user unit).
-# The bot reads the token via BOT_ACCESS_TOKEN_FILE; CONTROL_ROOM_ID
-# is loaded via EnvironmentFile= back into the unit's process env.
+# Stages three runtime files under $RUNTIME_DIRECTORY (set by
+# systemd for the user unit):
+#   access-token  - the bot's Matrix access token from Secrets Manager
+#   gateway-token - the OpenClaw daemon's loopback gateway token,
+#                   extracted from the openclaw.json state file
+#                   (openclaw stores it there rather than in a
+#                   standalone file)
+#   env           - K=V file loaded back into the unit via
+#                   EnvironmentFile=; populates CONTROL_ROOM_ID
+#                   from SSM Parameter Store
 
 set -euo pipefail
 
 : "${RUNTIME_DIRECTORY:?RUNTIME_DIRECTORY must be set by systemd}"
 : "${BOT_TOKEN_SECRET_ID:?BOT_TOKEN_SECRET_ID must be set in the unit}"
 : "${CONTROL_ROOM_PARAM:?CONTROL_ROOM_PARAM must be set in the unit}"
+: "${OPENCLAW_STATE_FILE:?OPENCLAW_STATE_FILE must be set in the unit}"
 
 aws secretsmanager get-secret-value \
   --secret-id "$BOT_TOKEN_SECRET_ID" \
@@ -19,6 +25,11 @@ aws secretsmanager get-secret-value \
   python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])' \
     >"$RUNTIME_DIRECTORY/access-token"
 chmod 0600 "$RUNTIME_DIRECTORY/access-token"
+
+python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["gateway"]["auth"]["token"])' \
+  "$OPENCLAW_STATE_FILE" \
+  >"$RUNTIME_DIRECTORY/gateway-token"
+chmod 0600 "$RUNTIME_DIRECTORY/gateway-token"
 
 control_room_id="$(aws ssm get-parameter \
   --name "$CONTROL_ROOM_PARAM" \
