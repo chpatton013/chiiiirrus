@@ -140,32 +140,31 @@ manual step is the Tailscale SaaS-side registration.
       becomes `@<authentik.user.username>:<public_domain>`.
 - Matrix → OpenClaw control bot (`OpenClawStack`)
     - The `@openclaw-bot:<public_domain>` account is registered
-      automatically by a Custom Resource in MatrixStack and its access
-      token written to Secrets Manager at `matrix/openclaw-bot-token`.
-      The bot service on the OpenClaw EC2 host is enabled but won't
-      start cleanly until you tell it which Matrix room to listen in.
-    - From Element, create a new private room with just yourself,
-      invite `@openclaw-bot:<public_domain>`, and copy the room's
-      Internal ID (Element: room Settings → Advanced → "Internal room
-      ID"; format: `!xxxx:<public_domain>`).
-    - Bind the bot to that room:
-      ```sh
-      bin/matrix-bot-bind-room '!xxxx:<public_domain>'
-      ```
-      The script writes the ID to SSM Parameter Store at
-      `/openclaw-matrix-bot/control-room-id`, restarts the bot's user
-      systemd unit on the OpenClaw instance, and tails the bot's
-      journal so you can see it accept the pending invite.
-    - From Element, verify the bot's device once via emoji comparison
-      (right-click the bot's avatar → Verify). The cross-signing
-      state lives on EFS, so subsequent restarts trust the existing
-      identity without re-verification.
-    - Test by sending a message in the control room. The bot forwards
-      the message body to the OpenClaw loopback gateway and replies
-      in-thread with the response. If you see `gateway HTTP 4xx/5xx`
-      replies, the gateway HTTP shape in
+      automatically by a Custom Resource in MatrixStack and its
+      access token written to Secrets Manager at
+      `matrix/openclaw-bot-token`. On its first start, when the
+      `/openclaw-matrix-bot/control-room-id` SSM parameter is unset,
+      the bot creates an encrypted DM, invites
+      `@<authentik.user.username>:<public_domain>`, and persists
+      the new room ID back to SSM. Subsequent restarts pick up the
+      same room from SSM.
+    - In Element, accept the invite from `@openclaw-bot`.
+    - Verify the bot's device once via emoji comparison (right-click
+      the bot's avatar → Verify). Cross-signing state lives on EFS,
+      so subsequent restarts trust the existing identity without
+      re-verification.
+    - Test by sending a message in the control room. The bot
+      forwards the body to the OpenClaw loopback gateway and replies
+      in-thread. If you see `gateway HTTP 4xx/5xx` replies, the
+      gateway HTTP shape in
       [`assets/openclaw_bot/src/openclaw.ts`](./assets/openclaw_bot/src/openclaw.ts)
       may need adjusting for your `openclaw` version's API.
+    - To rebind the bot to a different room (e.g. you abandoned the
+      first one), run
+      `bin/matrix-bot-bind-room '!xxx:<public_domain>'` with the new
+      room's Internal ID (Element: room Settings → Advanced →
+      "Internal room ID"). The bot needs to be already invited to
+      that room from your account.
 
 ## Operations
 
