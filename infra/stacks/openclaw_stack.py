@@ -178,7 +178,7 @@ class OpenClawStack(Stack):
         )
         role.add_to_principal_policy(
             iam.PolicyStatement(
-                actions=["ssm:GetParameter"],
+                actions=["ssm:GetParameter", "ssm:PutParameter"],
                 resources=[
                     f"arn:aws:ssm:{Aws.REGION}:{Aws.ACCOUNT_ID}:parameter{MATRIX_BOT_CONTROL_ROOM_PARAM}"
                 ],

@@ -31,9 +31,15 @@ python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["gateway"]["auth"
   >"$RUNTIME_DIRECTORY/gateway-token"
 chmod 0600 "$RUNTIME_DIRECTORY/gateway-token"
 
-control_room_id="$(aws ssm get-parameter \
-  --name "$CONTROL_ROOM_PARAM" \
-  --query Parameter.Value --output text)"
+# The control-room param may not exist on first deploy: in that
+# case the bot itself creates the room and writes the ID back here.
+# Treat missing-param as empty so the bot's bootstrap branch fires.
+control_room_id="$(
+  aws ssm get-parameter \
+    --name "$CONTROL_ROOM_PARAM" \
+    --query Parameter.Value --output text 2>/dev/null ||
+    true
+)"
 
 printf 'CONTROL_ROOM_ID=%s\n' "$control_room_id" \
   >"$RUNTIME_DIRECTORY/env"

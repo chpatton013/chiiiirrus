@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -13,7 +14,8 @@ import { forwardToGateway } from "./openclaw.js";
 interface Config {
   homeserverUrl: string;
   accessToken: string;
-  controlRoomId: string;
+  controlRoomId: string | null;
+  controlRoomParam: string;
   allowedSender: string;
   dataDir: string;
   gatewayUrl: string;
@@ -41,10 +43,12 @@ function readFileEnv(envName: string): string {
 function loadConfig(): Config {
   const dataDir = requireEnv("MATRIX_BOT_DATA_DIR");
   fs.mkdirSync(dataDir, { recursive: true });
+  const controlRoomIdRaw = (process.env.CONTROL_ROOM_ID ?? "").trim();
   return {
     homeserverUrl: requireEnv("HOMESERVER_URL"),
     accessToken: readFileEnv("BOT_ACCESS_TOKEN_FILE"),
-    controlRoomId: requireEnv("CONTROL_ROOM_ID"),
+    controlRoomId: controlRoomIdRaw || null,
+    controlRoomParam: requireEnv("CONTROL_ROOM_PARAM"),
     allowedSender: requireEnv("ALLOWED_SENDER"),
     dataDir,
     gatewayUrl: requireEnv("OPENCLAW_GATEWAY_URL"),
@@ -52,6 +56,46 @@ function loadConfig(): Config {
     rateLimitMaxPerWindow: 6,
     rateLimitWindowMs: 60_000,
   };
+}
+
+async function bootstrapControlRoom(
+  client: MatrixClient,
+  cfg: Config,
+  log: (level: "info" | "warn" | "error", msg: string) => void,
+): Promise<string> {
+  log("info", `bootstrapping control room; inviting ${cfg.allowedSender}`);
+  const roomId = await client.createRoom({
+    preset: "trusted_private_chat",
+    invite: [cfg.allowedSender],
+    is_direct: true,
+    name: "OpenClaw control",
+    topic:
+      "Messages here are forwarded to the OpenClaw loopback gateway on the EC2 host.",
+    initial_state: [
+      {
+        type: "m.room.encryption",
+        state_key: "",
+        content: { algorithm: "m.megolm.v1.aes-sha2" },
+      },
+    ],
+  });
+  log("info", `created ${roomId}; persisting to SSM ${cfg.controlRoomParam}`);
+  execFileSync(
+    "aws",
+    [
+      "ssm",
+      "put-parameter",
+      "--name",
+      cfg.controlRoomParam,
+      "--value",
+      roomId,
+      "--type",
+      "String",
+      "--overwrite",
+    ],
+    { stdio: "pipe" },
+  );
+  return roomId;
 }
 
 class SlidingWindowLimiter {
@@ -77,8 +121,6 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ ts: new Date().toISOString(), level, msg }));
   };
 
-  log("info", `starting bot for ${cfg.allowedSender} in ${cfg.controlRoomId}`);
-
   const storage = new SimpleFsStorageProvider(
     path.join(cfg.dataDir, "bot-storage.json"),
   );
@@ -94,9 +136,18 @@ async function main(): Promise<void> {
     cryptoStorage,
   );
 
+  // First-run bootstrap: if SSM hasn't been seeded with a control
+  // room ID, create one ourselves with the allowed sender invited
+  // and an `m.room.encryption` state event so the room is E2EE
+  // from the first message. The new ID is written back to SSM so
+  // subsequent restarts pick it up via the prestart helper.
+  const controlRoomId =
+    cfg.controlRoomId ?? (await bootstrapControlRoom(client, cfg, log));
+  log("info", `starting bot for ${cfg.allowedSender} in ${controlRoomId}`);
+
   // Auto-join the control room only. Refuse all other invites.
   client.on("room.invite", async (roomId: string, invite) => {
-    if (roomId !== cfg.controlRoomId) {
+    if (roomId !== controlRoomId) {
       log("warn", `rejecting invite to non-allowlisted room ${roomId}`);
       try {
         await client.leaveRoom(roomId);
@@ -128,7 +179,7 @@ async function main(): Promise<void> {
 
   client.on("room.message", async (roomId: string, event: any) => {
     // Allowlist: room
-    if (roomId !== cfg.controlRoomId) return;
+    if (roomId !== controlRoomId) return;
     // Allowlist: sender
     if (event?.sender !== cfg.allowedSender) {
       log(
