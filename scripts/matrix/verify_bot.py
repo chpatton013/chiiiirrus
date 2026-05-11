@@ -164,7 +164,7 @@ def main() -> int:
     )
     parser.add_argument(
         "bot_user_id",
-        help="The bot's MXID, e.g. @openclaw-bot-3:chiiiirs.com",
+        help="The bot's MXID, e.g. @openclaw-bot:chiiiirs.com",
     )
     parser.add_argument(
         "--homeserver-url",

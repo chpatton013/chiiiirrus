@@ -139,9 +139,9 @@ manual step is the Tailscale SaaS-side registration.
       works); start the SSO flow; sign in via Authentik. Your MXID
       becomes `@<authentik.user.username>:<public_domain>`.
 - Matrix → OpenClaw control bot (`OpenClawStack`)
-    - The bot account (currently `@openclaw-bot-3:<public_domain>`;
-      the suffix tracks the bootstrap CR's `BOT_USERNAME` constant
-      in `infra/stacks/matrix_stack.py`) is registered automatically
+    - The bot account (`@openclaw-bot:<public_domain>`; tracked by
+      the bootstrap CR's `BOT_USERNAME` constant in
+      `infra/stacks/matrix_stack.py`) is registered automatically
       by a Custom Resource in MatrixStack and its access token
       written to Secrets Manager at `matrix/openclaw-bot-token`. On
       its first start, when the
@@ -157,7 +157,7 @@ manual step is the Tailscale SaaS-side registration.
       user" hangs against the bot. Instead, run the side-channel
       CLI once:
       ```sh
-      bin/matrix-bot-verify '@openclaw-bot-3:<public_domain>'
+      bin/matrix-bot-verify '@openclaw-bot:<public_domain>'
       ```
       It prompts for your Element access token (Settings > Help &
       About > Advanced > "Access Token") and your Element recovery
