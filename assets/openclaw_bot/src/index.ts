@@ -21,6 +21,7 @@ interface Config {
   dataDir: string;
   agentId: string;
   agentTimeoutSeconds: number;
+  gatewayToken: string;
   rateLimitMaxPerWindow: number;
   rateLimitWindowMs: number;
 }
@@ -56,6 +57,7 @@ function loadConfig(): Config {
     agentTimeoutSeconds: Number(
       process.env.OPENCLAW_AGENT_TIMEOUT_SECONDS ?? "120",
     ),
+    gatewayToken: readFileEnv("OPENCLAW_GATEWAY_TOKEN_FILE"),
     rateLimitMaxPerWindow: 6,
     rateLimitWindowMs: 60_000,
   };
@@ -233,6 +235,7 @@ async function main(): Promise<void> {
         agentId: cfg.agentId,
         prompt,
         timeoutSeconds: cfg.agentTimeoutSeconds,
+        gatewayToken: cfg.gatewayToken,
       });
       await client.replyText(roomId, event, response);
     } catch (e) {

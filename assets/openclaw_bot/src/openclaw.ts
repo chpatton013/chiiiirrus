@@ -17,6 +17,7 @@ interface ForwardOpts {
   agentId: string;
   prompt: string;
   timeoutSeconds: number;
+  gatewayToken: string;
 }
 
 const REPLY_FIELDS = [
@@ -53,16 +54,18 @@ export async function forwardToGateway(opts: ForwardOpts): Promise<string> {
   let stdout = "";
   let stderr = "";
   try {
-    // Strip OPENCLAW_GATEWAY_* env we inherited from systemd before
-    // execing the CLI. Otherwise the CLI sees a gateway URL/token
-    // env "override" and refuses to use its config-file credentials,
-    // bailing with "gateway url override requires explicit credentials".
+    // The bot's systemd env has OPENCLAW_GATEWAY_URL set (legacy
+    // HTTP-era). Drop it so the CLI doesn't treat it as an override
+    // of its config-file gateway URL. Set OPENCLAW_GATEWAY_TOKEN
+    // from the prestart-staged file so the WS handshake authenticates
+    // (the CLI's own config_file `gateway.remote.token` is empty for
+    // this install).
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.OPENCLAW_GATEWAY_URL;
-    delete env.OPENCLAW_GATEWAY_TOKEN;
     delete env.OPENCLAW_GATEWAY_TOKEN_FILE;
     delete env.OPENCLAW_GATEWAY_PASSWORD;
     delete env.OPENCLAW_GATEWAY_PASSWORD_FILE;
+    env.OPENCLAW_GATEWAY_TOKEN = opts.gatewayToken;
     const res = await execFileAsync("openclaw", args, {
       timeout: (opts.timeoutSeconds + 15) * 1000,
       maxBuffer: 4 * 1024 * 1024,
