@@ -19,6 +19,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
 from ..constructs.shared_volume_init import SharedVolumeInit
@@ -412,6 +413,14 @@ class AuthentikStack(Stack):
             "WorkerDbIngress",
             peer=worker_service.service,
             description="Authentik worker to DB",
+        )
+        # Both services share the same DB; expose the server task to
+        # bin/db-sql since it's the primary, but the worker would
+        # work identically.
+        tag_for_db_exec(
+            server_service.service,
+            label="authentik",
+            env_prefix="AUTHENTIK_POSTGRESQL__",
         )
 
         # Allow ALB to connect to server service HTTP port.

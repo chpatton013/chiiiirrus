@@ -20,6 +20,7 @@ from constructs import Construct
 
 from aws_cdk import aws_ecr_assets as ecr_assets
 
+from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.ec2_service import PrivateEgressEc2Service
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
@@ -400,6 +401,12 @@ class HeadscaleStack(Stack):
             "HeadscaleDbIngress",
             peer=headscale_service.service,
             description="Headscale to DB",
+        )
+        tag_for_db_exec(
+            headscale_service.service,
+            label="headscale",
+            env_prefix="HEADSCALE_DATABASE_POSTGRES_",
+            env_password_suffix="PASS",
         )
 
         ###

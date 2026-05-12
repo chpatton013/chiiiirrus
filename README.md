@@ -682,3 +682,7 @@ DAG. But they can never declare a cyclical dependency.
     - Be specific about which properties we want from foundation and data exports
     - EFS and RDS backups
     - host element service
+    - host vector identity service for matrix
+    - consider adding a "bastion" host (only reachable over ssm) that has
+    permission to access the rds instance. Or workshop an alternative that
+    doesn't require a separate resource.

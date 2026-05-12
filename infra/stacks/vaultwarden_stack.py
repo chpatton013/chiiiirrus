@@ -12,6 +12,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
 from ..models.foundation_exports import FoundationExports
@@ -227,3 +228,4 @@ class VaultwardenStack(Stack):
             peer=service.service,
             description="Vaultwarden to DB",
         )
+        tag_for_db_exec(service.service, label="vaultwarden")

@@ -21,6 +21,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
 from ..models.asset_loader import AssetLoader
@@ -332,6 +333,20 @@ class MatrixStack(Stack):
                     "SYNAPSE_CONFIG_PATH": "/data/homeserver.yaml",
                     "SYNAPSE_SERVER_NAME": server_name,
                     "SYNAPSE_REPORT_STATS": "no",
+                    # Same DB connection vars as the init container,
+                    # for bin/db-sql: lets an ECS-Exec'd shell run
+                    # python3 + psycopg2 (already bundled in the
+                    # Synapse image) against the matrix DB without
+                    # plumbing master credentials.
+                    "DB_HOST": data.database.instance.db_instance_endpoint_address,
+                    "DB_PORT": str(data.database.port),
+                    "DB_NAME": cfg.db.name,
+                },
+                secrets={
+                    "DB_USER": ecs.Secret.from_secrets_manager(db_secret, "username"),
+                    "DB_PASSWORD": ecs.Secret.from_secrets_manager(
+                        db_secret, "password"
+                    ),
                 },
             ),
             health_check_grace_period=Duration.seconds(120),
@@ -429,39 +444,10 @@ class MatrixStack(Stack):
             peer=service.service,
             description="Synapse to DB",
         )
-
-        ###
-        # Admin SQL runner Lambda. One-off ops against the matrix DB
-        # as the master user: recover a stale access token, clear
-        # ghost e2e_* rows, deactivate orphan accounts. Invoked
-        # manually via `aws lambda invoke` with a queries[] payload.
-
-        matrix_admin_fn = lambda_python.PythonFunction(
-            self,
-            "MatrixAdminFn",
-            entry=str(imports.assets.lambda_path("matrix_admin")),
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            index="index.py",
-            handler="handler",
-            timeout=Duration.minutes(2),
-            vpc=foundation.vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-            ),
-            environment={
-                "DB_HOST": data.database.instance.db_instance_endpoint_address,
-                "DB_PORT": str(data.database.port),
-                "DB_NAME": cfg.db.name,
-                "MASTER_SECRET_ARN": data.master_secret.secret_arn,
-            },
-        )
-        data.master_secret.grant_read(matrix_admin_fn)
-        data.database.grant_connect(
-            self,
-            "MatrixAdminDbIngress",
-            peer=matrix_admin_fn,
-            description="Matrix admin Lambda to DB",
-        )
+        # Discoverable by bin/db-sql for ad-hoc SQL against the matrix
+        # DB. Uses the matrix user (not master) -- sufficient for DML
+        # on Synapse's own tables; the matrix user owns the schema.
+        tag_for_db_exec(service.service, label="matrix")
 
         ###
         # Backups (signing key + media + registration secret all
