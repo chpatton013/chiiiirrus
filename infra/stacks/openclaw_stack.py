@@ -346,7 +346,7 @@ class OpenClawStack(Stack):
             + " && ".join(
                 [
                     f"cd {MATRIX_BOT_INSTALL_DIR!s}",
-                    "~/.local/share/pnpm/bin/pnpm install --frozen-lockfile --ignore-scripts",
+                    "~/.local/share/pnpm/pnpm install --frozen-lockfile --ignore-scripts",
                     "(cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js)",
                     "./node_modules/.bin/tsc",
                 ]
