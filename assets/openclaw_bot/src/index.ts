@@ -19,8 +19,8 @@ interface Config {
   controlRoomParam: string;
   allowedSender: string;
   dataDir: string;
-  gatewayUrl: string;
-  gatewayToken: string;
+  agentId: string;
+  agentTimeoutSeconds: number;
   rateLimitMaxPerWindow: number;
   rateLimitWindowMs: number;
 }
@@ -52,8 +52,10 @@ function loadConfig(): Config {
     controlRoomParam: requireEnv("CONTROL_ROOM_PARAM"),
     allowedSender: requireEnv("ALLOWED_SENDER"),
     dataDir,
-    gatewayUrl: requireEnv("OPENCLAW_GATEWAY_URL"),
-    gatewayToken: readFileEnv("OPENCLAW_GATEWAY_TOKEN_FILE"),
+    agentId: process.env.OPENCLAW_AGENT_ID?.trim() || "main",
+    agentTimeoutSeconds: Number(
+      process.env.OPENCLAW_AGENT_TIMEOUT_SECONDS ?? "120",
+    ),
     rateLimitMaxPerWindow: 6,
     rateLimitWindowMs: 60_000,
   };
@@ -228,9 +230,9 @@ async function main(): Promise<void> {
 
     try {
       const response = await forwardToGateway({
-        gatewayUrl: cfg.gatewayUrl,
-        gatewayToken: cfg.gatewayToken,
+        agentId: cfg.agentId,
         prompt,
+        timeoutSeconds: cfg.agentTimeoutSeconds,
       });
       await client.replyText(roomId, event, response);
     } catch (e) {

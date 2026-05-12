@@ -1,47 +1,87 @@
-// HTTP client for the loopback OpenClaw gateway.
+// Bridge to the OpenClaw agent via the `openclaw` CLI subprocess.
 //
-// The gateway is bound to 127.0.0.1:18789 with token auth (set by
-// `openclaw onboard ... --gateway-auth token --gateway-bind loopback`).
-// Exact request/response shape is TBD - the systemd unit will pass
-// the gateway URL + token, and this module abstracts the call so
-// the integration can evolve without touching the bot's allowlist
-// logic.
+// The local gateway is a WebSocket-RPC service (not REST), so HTTP
+// POSTs to a `/v1/chat`-style path 404. Instead, we shell out to
+// `openclaw agent --agent <id> --message <text> --json --timeout <s>`,
+// which connects to the loopback gateway, runs one agent turn, and
+// prints the reply to stdout. The CLI inherits the bot user's
+// OpenClaw config (token, default agent, etc.) so we don't have to
+// re-plumb auth here.
+
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 interface ForwardOpts {
-  gatewayUrl: string;
-  gatewayToken: string;
+  agentId: string;
   prompt: string;
+  timeoutSeconds: number;
 }
 
-interface ChatResponse {
-  // Tentative shape; revisit once the live gateway API is confirmed.
-  response?: string;
-  reply?: string;
-  output?: string;
-  error?: string;
+const REPLY_FIELDS = [
+  "reply",
+  "message",
+  "response",
+  "text",
+  "output",
+  "content",
+];
+
+function extractReply(parsed: unknown): string | null {
+  if (typeof parsed === "string") return parsed;
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  for (const f of REPLY_FIELDS) {
+    const v = obj[f];
+    if (typeof v === "string" && v.trim().length > 0) return v;
+  }
+  return null;
 }
 
 export async function forwardToGateway(opts: ForwardOpts): Promise<string> {
-  const url = `${opts.gatewayUrl.replace(/\/+$/, "")}/v1/chat`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${opts.gatewayToken}`,
-    },
-    body: JSON.stringify({ prompt: opts.prompt }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "<no body>");
-    throw new Error(`gateway HTTP ${res.status}: ${body.slice(0, 500)}`);
+  const args = [
+    "agent",
+    "--agent",
+    opts.agentId,
+    "--message",
+    opts.prompt,
+    "--json",
+    "--timeout",
+    String(opts.timeoutSeconds),
+  ];
+  let stdout = "";
+  let stderr = "";
+  try {
+    const res = await execFileAsync("openclaw", args, {
+      timeout: (opts.timeoutSeconds + 15) * 1000,
+      maxBuffer: 4 * 1024 * 1024,
+      encoding: "utf8",
+    });
+    stdout = res.stdout ?? "";
+    stderr = res.stderr ?? "";
+  } catch (e) {
+    // execFile rejects on non-zero exit, signal, or timeout. The
+    // CLI prints structured errors to stderr (sometimes stdout); we
+    // surface those to the bot caller for visibility.
+    const err = e as { stdout?: string; stderr?: string; message: string };
+    stdout = err.stdout ?? "";
+    stderr = err.stderr ?? "";
+    const detail = stderr.trim() || stdout.trim() || err.message;
+    throw new Error(`openclaw agent failed: ${detail.slice(0, 800)}`);
   }
-  const data = (await res.json()) as ChatResponse;
-  if (data.error) throw new Error(data.error);
-  const out = data.response ?? data.reply ?? data.output;
-  if (!out) {
-    throw new Error(
-      `gateway returned no message field: ${JSON.stringify(data).slice(0, 500)}`,
-    );
+  const trimmed = stdout.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const reply = extractReply(JSON.parse(trimmed));
+      if (reply) return reply;
+    } catch {
+      // fall through to plain-text handling
+    }
   }
-  return out;
+  if (trimmed) return trimmed;
+  if (stderr.trim()) {
+    throw new Error(`openclaw agent: ${stderr.trim().slice(0, 800)}`);
+  }
+  throw new Error("openclaw agent returned empty output");
 }
