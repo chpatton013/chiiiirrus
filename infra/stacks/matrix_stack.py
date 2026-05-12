@@ -23,6 +23,7 @@ from constructs import Construct
 
 from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.fargate_service import PrivateEgressFargateService
+from ..constructs.input_hash import expand_globs, hash_inputs
 from ..constructs.public_http_alb import PublicHttpAlb
 from ..models.asset_loader import AssetLoader
 from ..models.data_exports import DataExports
@@ -618,11 +619,22 @@ class MatrixStack(Stack):
             "BootstrapProvider",
             on_event_handler=cast(lambda_.IFunction, bootstrap_fn),
         )
+        # Re-fires the bootstrap CR whenever any input changes:
+        # the Lambda code that runs the registration, the bootstrap
+        # bash script (with the BOT_USERNAME constant embedded), or
+        # the homeserver URL the script POSTs to.
+        bootstrap_trigger = hash_inputs(
+            files=expand_globs(
+                imports.assets.lambda_path("matrix_bot_account"), "**/*"
+            ),
+            env={"HOMESERVER_URL": f"https://{listener_fqdn}"},
+            extra=_BOOTSTRAP_SCRIPT,
+        )
         bootstrap_resource = CustomResource(
             self,
             "BotAccountBootstrap",
             service_token=bootstrap_provider.service_token,
-            properties={"Trigger": "v4"},
+            properties={"Trigger": bootstrap_trigger},
         )
         # Synapse must be live before the bootstrap task can hit
         # `/_synapse/admin/v1/register` and `/_matrix/client/v3/login`.

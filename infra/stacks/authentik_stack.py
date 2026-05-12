@@ -1,5 +1,3 @@
-import hashlib
-import json
 import pathlib
 import tempfile
 from dataclasses import dataclass
@@ -21,6 +19,7 @@ from constructs import Construct
 
 from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.fargate_service import PrivateEgressFargateService
+from ..constructs.input_hash import hash_inputs
 from ..constructs.public_http_alb import PublicHttpAlb
 from ..constructs.shared_volume_init import SharedVolumeInit
 from ..models.asset_loader import AssetLoader
@@ -76,16 +75,14 @@ def _stamp_blueprints(
     so YAML-only edits (no env-var change) still flip a task-def env
     var and force the worker to roll.
     """
-    yamls = sorted((p.name, p.read_text()) for p in src.glob("*.yaml"))
-    digest_input = json.dumps(
-        {"yamls": yamls, "env": dict(sorted(env.items()))},
-        sort_keys=True,
-    )
-    digest = hashlib.sha256(digest_input.encode()).hexdigest()[:16]
+    yamls = sorted(src.glob("*.yaml"))
+    digest = hash_inputs(files=yamls, env=env)
 
     stamped = pathlib.Path(tempfile.mkdtemp(prefix="ak-blueprints-"))
-    for name, body in yamls:
-        (stamped / name).write_text(body + f"\n# blueprint-inputs-hash: {digest}\n")
+    for p in yamls:
+        (stamped / p.name).write_text(
+            p.read_text() + f"\n# blueprint-inputs-hash: {digest}\n"
+        )
     return stamped, digest
 
 
