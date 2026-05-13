@@ -125,9 +125,12 @@ class OpenClawStack(Stack):
 
         # OpenClaw's VPC is single-tier public (no NAT, no isolated
         # subnets), so override the construct's PRIVATE_WITH_EGRESS
-        # default. RemovalPolicy.DESTROY is intentional: the EFS holds
-        # /data/openclaw state we're happy to rebuild on stack
-        # recreate, unlike the RETAIN'd EFS on MatrixStack/etc.
+        # default. RETAIN: this EFS holds openclaw agent state
+        # (sessions, memory, auth-profiles, workspaces) plus the
+        # matrix bot's cross-signing keys. We do NOT want a
+        # `cdk destroy OpenClawStack` to nuke that material -- instance
+        # replacement leaves the EFS in place regardless of policy, but
+        # a manual stack destroy without RETAIN would.
         efs_volume = SharedEfsVolume(
             self,
             "OpenClawEfs",
@@ -143,7 +146,7 @@ class OpenClawStack(Stack):
                 ),
             ],
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            removal_policy=RemovalPolicy.DESTROY,
+            removal_policy=RemovalPolicy.RETAIN,
             lifecycle_policy=efs.LifecyclePolicy.AFTER_14_DAYS,
         )
         efs_sg = efs_volume.security_group
@@ -196,6 +199,61 @@ class OpenClawStack(Stack):
         # installs it locally on the instance. node_modules + dist
         # are .gitignore'd and rebuilt on the host so the deploy
         # bundle stays small.
+        # AGENT TODO: I wanted to start small with the scope of the bot for the
+        # sake of getting things working, but now I want to share the bigger
+        # picture of how I want this to work.
+        # - First, focusing on the setup of the human users. Most of this
+        # deployment has been built to automatically set up my own user account,
+        # but I also want to add a user account for my partner. I don't think I
+        # need to include her account in the authentik blueprints, since I plan
+        # on making it for her in authentik by hand. Trying to automate that
+        # would complicate the setup we have now with env-var injection; as long
+        # as her account isn't lost during redeploys then I'm fine with setting
+        # it up manually this one time.
+        # - Second, onto agents. I want to have multiple openclaw agents, each
+        # tailored for a specific purpose, and I want to use different matrix
+        # rooms to talk to them. I want each of those agents to appear as their
+        # own matrix username, with separate identities I can address in
+        # messages. For the sake of giving practical examples, let's assign some
+        # names. My name is Chris, my partner's name is Chelsea, and I have
+        # three different AI agents in mind: Wadsworth, Sebastian, and Binx.
+        # Each of these three agents are assistants to help keep our daily lives
+        # humming along smoothly, but they have different roles.
+        #   - Sebastian is my personal assistant, whom I can share sensitive
+        #   information with (like planning a surprise for my partner without
+        #   worrying about her finding out), assign all sorts of tasks to (like
+        #   clean up my email inbox), etc.
+        #   - Binx plays that same role for my partner.
+        #   - Wadsworth is a shared assistant that both myself and my partner
+        #   can talk to and assign tasks to that we don't mind the other
+        #   learning about. For example, "plan a game night with the neighbors
+        #   that works with our schedules".
+        # The rationale behind splitting these roles across agents is to
+        # partition information, personas, memory, etc so there's no chance of
+        # cross-contamination. My partner and I can build Wadsworth together,
+        # but we each retain our own private assistants.
+        # I'm worried about the security implications of exposing the control ui
+        # for openclaw on the internet (and I won't have much luck getting my
+        # partner to connect to tailscale to access it), so I want to use Matrix
+        # as the "safe" way to direct these agents (since E2EE in matrix rooms
+        # gives me confidence that an external attacker hasn't hacked my matrix
+        # server either).
+        # I'd like to be able to use matrix rooms in the same way that ai chat
+        # interfaces uses separate chats. The agent still has all the project
+        # context (the other chats) for reference, but the primary context comes
+        # from the chat history in that room specifically. Those rooms can have
+        # multiple humans and/or multiple agents in them. For example, I may
+        # make a room where I invite both Wadsworth and Sebastian so Sebastian
+        # can distill and transfer some bit of relevant information to
+        # Wadsworth. Or both Chelsea and I may join a room with Wadsworth where
+        # we plan an event.
+        # Eventually I'll make many more agents for different purposes, and I'll
+        # want to make rooms mixing and matching many of them together. I don't
+        # know the full set of agents and rooms I'll want, so I don't think that
+        # information belongs encoded in this repo's IAC. Instead, I want the
+        # code here to set up the building blocks that can enable this use
+        # pattern. Let's brainstorm about what we would need to do to set that
+        # up.
         bot_asset = s3_assets.Asset(
             self,
             "MatrixBotAsset",
@@ -218,194 +276,41 @@ class OpenClawStack(Stack):
             os=ec2.OperatingSystemType.LINUX,
         )
 
-        user_data = ec2.UserData.for_linux()
-        user_data.add_commands(
-            "exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1",
-            "set -euxo pipefail",
-            "trap 'echo USERDATA FAILED on line $LINENO' ERR",
-            "export DEBIAN_FRONTEND=noninteractive",
-            # Add nodesource apt repo.
-            "install -d -m 0755 /etc/apt/keyrings",
-            f"curl -fsSL {NODESOURCE_KEY_URI} | gpg --dearmor -o {NODESOURCE_KEY_PATH!s}",
-            f'echo "deb [signed-by={NODESOURCE_KEY_PATH!s}] {NODESOURCE_REPO_URI} nodistro main" >{NODESOURCE_REPO_PATH!s}',
-            # Install build dependencies from apt repos.
-            "apt-get update",
-            f"apt-get install -y {' '.join(BUILD_DEPENDENCIES)}",
-            # Enable service lingering for ubuntu user. This allows the openclaw
-            # gateway service to run as a user service instead of a system
-            # service.
-            "loginctl enable-linger ubuntu",
-            # Install EFS Utils from official installer.
-            f"curl -fsSL {EFS_UTILS_INSTALLER_URI} | sh -s -- --install",
-            # Set up EFS mount point.
-            f"mkdir -p {EFS_MOUNTPOINT_DIR!s}",
-            f'echo "{efs_fstab}" >>/etc/fstab',
-            "mount -a",
-            f"mountpoint -q {EFS_MOUNTPOINT_DIR!s}",
-            # Install OpenClaw globally from npm.
-            f"mkdir -p {OPENCLAW_HOME_DIR!s} {OPENCLAW_STATE_DIR!s} {OPENCLAW_WORKSPACES_DIR!s}",
-            f"chown -R ubuntu:ubuntu {OPENCLAW_HOME_DIR!s} {OPENCLAW_STATE_DIR!s} {OPENCLAW_WORKSPACES_DIR!s}",
-            "npm install -g openclaw@latest",
-            "\n".join(
-                [
-                    "cat >/etc/profile.d/openclaw.sh <<'EOF'",
-                    f"export OPENCLAW_HOME={OPENCLAW_HOME_DIR!s}",
-                    f"export OPENCLAW_STATE_DIR={OPENCLAW_STATE_DIR!s}",
-                    "EOF",
-                ]
-            ),
-            "chmod 0644 /etc/profile.d/openclaw.sh",
-            # Install Linux Homebrew as the ssm-user user from the official
-            # installer.
-            # NOTE: Homebrew installer refuses to run as root, but does need to
-            # use sudo for root permissions. `brew shellenv` returns nothing for
-            # root user, so it must be run as a non-privileged user.
-            # ssm-user is normally created lazily by SSM on first interactive
-            # session; on a freshly-replaced instance it doesn't exist yet, so
-            # create it explicitly before brew tries to `sudo -iu` into it.
-            "id ssm-user >/dev/null 2>&1 || useradd -m -s /bin/bash ssm-user",
-            'install -d -m 0755 /etc/sudoers.d && echo "ssm-user ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/ssm-user',
-            f"curl -fsSL {HOMEBREW_INSTALLER_URI} | sudo -iu ssm-user /bin/bash",
-            " ".join(
-                [
-                    "sudo -u ssm-user /home/linuxbrew/.linuxbrew/bin/brew shellenv",
-                    "| tee /etc/profile.d/homebrew.sh >/dev/null",
-                ]
-            ),
-            "chmod 0644 /etc/profile.d/homebrew.sh",
-            # Install pnpm for the ubuntu user from the official installer.
-            f"curl -fsSL {PNPM_INSTALLER_URI} | sudo -iu ubuntu env PNPM_VERSION={PNPM_VERSION} /bin/bash",
-            # Configure openclaw onboarding.
-            # NOTE: We both use `sudo -i` and set XDG_RUNTIME_DIR to allow
-            # systemctl to enable user services without a reboot or login cycle.
-            " ".join(
-                [
-                    'sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)"',
-                    "openclaw onboard",
-                    "--non-interactive --accept-risk",
-                    "--mode local --tailscale serve",
-                    "--install-daemon --gateway-auth token --gateway-bind loopback",
-                    "--daemon-runtime node --node-manager pnpm",
-                    f"--workspace {(OPENCLAW_WORKSPACES_DIR / "main")!s}",
-                    "--auth-choice skip --skip-channels --skip-search --skip-skills",
-                    "--json",
-                ]
-            ),
-            *(
-                " ".join(
-                    [
-                        'sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)"',
-                        f"openclaw hooks enable {hook}",
-                    ]
-                )
-                for hook in OPENCLAW_HOOKS
-            ),
-            # TODO: Enable after https://github.com/openclaw/openclaw/pull/63679 merges.
-            # " ".join([
-            #     "sudo -iu ubuntu XDG_RUNTIME_DIR=\"/run/user/$(id -u ubuntu)\"",
-            #     "openclaw completion --install",
-            # ]),
-            # Matrix bot install: fetch the bot source bundle from
-            # S3, unpack into /opt, install deps + build, then drop a
-            # systemd user unit that runs it as ubuntu. The bot's
-            # E2E + sync state lives under /data/matrix-bot on EFS so
-            # device verification persists across instance
-            # replacements.
-            "apt-get install -y unzip python3",
-            # AWS CLI v2 from the official installer (Ubuntu 24.04
-            # dropped the `awscli` apt package in favor of the snap;
-            # the standalone installer is the lighter dependency).
-            'curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip',
-            "unzip -oq /tmp/awscliv2.zip -d /tmp",
-            "/tmp/aws/install --update",
-            f"mkdir -p {MATRIX_BOT_INSTALL_DIR!s} {MATRIX_BOT_DIR!s}",
-            f"chown -R ubuntu:ubuntu {MATRIX_BOT_DIR!s}",
-            f"aws s3 cp s3://{bot_asset.s3_bucket_name}/{bot_asset.s3_object_key} /tmp/openclaw_bot.zip",
-            f"unzip -oq /tmp/openclaw_bot.zip -d {MATRIX_BOT_INSTALL_DIR!s}",
-            f"chown -R ubuntu:ubuntu {MATRIX_BOT_INSTALL_DIR!s}",
-            f"chmod +x {MATRIX_BOT_INSTALL_DIR!s}/scripts/prestart",
-            # pnpm is user-installed at ~/.local/share/pnpm/bin; the
-            # PATH export lives in ~/.bashrc which non-interactive
-            # shells skip via the early `*i*) ;; *) return ;;`
-            # guard, so call the binary by absolute path.
-            #
-            # @matrix-org/matrix-sdk-crypto-nodejs has a postinstall
-            # that downloads its platform-specific native binding
-            # (.node file). pnpm v11 errors out under
-            # --frozen-lockfile when any package's build script
-            # would be skipped (the `ERR_PNPM_IGNORED_BUILDS`
-            # gate), and its onlyBuiltDependencies allowlist isn't
-            # accepted non-interactively. Workaround: install with
-            # --ignore-scripts (no complaint, exits 0) and run the
-            # downloader by hand right after.
-            #
-            # Using `tsc` directly instead of `pnpm run build` -
-            # `pnpm run` does an extra dep-status round-trip that
-            # crashes against the readonly node_modules layout pnpm
-            # leaves on disk in some configurations.
-            "sudo -iu ubuntu bash -c '"
-            + " && ".join(
-                [
-                    f"cd {MATRIX_BOT_INSTALL_DIR!s}",
-                    "~/.local/share/pnpm/pnpm install --frozen-lockfile --ignore-scripts",
-                    "(cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js)",
-                    "./node_modules/.bin/tsc",
-                ]
-            )
-            + "'",
-            "install -d -m 0755 /home/ubuntu/.config/systemd/user",
-            "\n".join(
-                [
-                    "cat >/home/ubuntu/.config/systemd/user/openclaw-matrix-bot.service <<'EOF'",
-                    "[Unit]",
-                    "Description=OpenClaw Matrix bot",
-                    "After=network-online.target",
-                    "Wants=network-online.target",
-                    "",
-                    "[Service]",
-                    "Type=simple",
-                    f"WorkingDirectory={MATRIX_BOT_INSTALL_DIR!s}",
-                    "RuntimeDirectory=openclaw-matrix-bot",
-                    "RuntimeDirectoryMode=0700",
-                    f"Environment=HOMESERVER_URL={imports.matrix_homeserver_url}",
-                    f"Environment=ALLOWED_SENDER={imports.allowed_sender}",
-                    f"Environment=MATRIX_BOT_DATA_DIR={MATRIX_BOT_DIR!s}",
-                    "Environment=OPENCLAW_GATEWAY_TOKEN_FILE=%t/openclaw-matrix-bot/gateway-token",
-                    "Environment=BOT_ACCESS_TOKEN_FILE=%t/openclaw-matrix-bot/access-token",
-                    f"Environment=BOT_TOKEN_SECRET_ID={MATRIX_BOT_TOKEN_SECRET}",
-                    f"Environment=CONTROL_ROOM_PARAM={MATRIX_BOT_CONTROL_ROOM_PARAM}",
-                    f"Environment=OPENCLAW_STATE_FILE={OPENCLAW_STATE_FILE!s}",
-                    "EnvironmentFile=-%t/openclaw-matrix-bot/env",
-                    f"ExecStartPre={MATRIX_BOT_INSTALL_DIR!s}/scripts/prestart",
-                    f"ExecStart=/usr/bin/node {MATRIX_BOT_INSTALL_DIR!s}/dist/index.js",
-                    "Restart=on-failure",
-                    "RestartSec=10s",
-                    "",
-                    "[Install]",
-                    "WantedBy=default.target",
-                    "EOF",
-                ]
-            ),
-            "chown ubuntu:ubuntu /home/ubuntu/.config/systemd/user/openclaw-matrix-bot.service",
-            "chmod 0644 /home/ubuntu/.config/systemd/user/openclaw-matrix-bot.service",
-            # Enable + start. Will fail loudly if the SSM parameter
-            # isn't yet populated; that's expected on first deploy
-            # before I create the control room. `restart` after
-            # populating the param is the manual recovery.
-            " ".join(
-                [
-                    'sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)"',
-                    "systemctl --user daemon-reload",
-                ]
-            ),
-            " ".join(
-                [
-                    'sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)"',
-                    "systemctl --user enable openclaw-matrix-bot.service",
-                ]
-            ),
-            "",
+        hook_commands = "\n".join(
+            f'sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)" openclaw hooks enable {h}'
+            for h in OPENCLAW_HOOKS
         )
+        user_data_template = imports.assets.read_text("openclaw", "user-data.sh.tmpl")
+        substitutions = {
+            "NODESOURCE_KEY_URI": NODESOURCE_KEY_URI,
+            "NODESOURCE_KEY_PATH": str(NODESOURCE_KEY_PATH),
+            "NODESOURCE_REPO_URI": NODESOURCE_REPO_URI,
+            "NODESOURCE_REPO_PATH": str(NODESOURCE_REPO_PATH),
+            "BUILD_DEPENDENCIES": " ".join(BUILD_DEPENDENCIES),
+            "EFS_UTILS_INSTALLER_URI": EFS_UTILS_INSTALLER_URI,
+            "EFS_MOUNTPOINT_DIR": str(EFS_MOUNTPOINT_DIR),
+            "EFS_FSTAB": efs_fstab,
+            "OPENCLAW_HOME_DIR": str(OPENCLAW_HOME_DIR),
+            "OPENCLAW_STATE_DIR": str(OPENCLAW_STATE_DIR),
+            "OPENCLAW_WORKSPACES_DIR": str(OPENCLAW_WORKSPACES_DIR),
+            "OPENCLAW_MAIN_WORKSPACE": str(OPENCLAW_WORKSPACES_DIR / "main"),
+            "OPENCLAW_HOOK_COMMANDS": hook_commands,
+            "HOMEBREW_INSTALLER_URI": HOMEBREW_INSTALLER_URI,
+            "PNPM_INSTALLER_URI": PNPM_INSTALLER_URI,
+            "PNPM_VERSION": PNPM_VERSION,
+            "MATRIX_BOT_INSTALL_DIR": str(MATRIX_BOT_INSTALL_DIR),
+            "MATRIX_BOT_DIR": str(MATRIX_BOT_DIR),
+            "BOT_ASSET_S3_URI": f"s3://{bot_asset.s3_bucket_name}/{bot_asset.s3_object_key}",
+            "HOMESERVER_URL": imports.matrix_homeserver_url,
+            "ALLOWED_SENDER": imports.allowed_sender,
+            "MATRIX_BOT_TOKEN_SECRET": MATRIX_BOT_TOKEN_SECRET,
+            "MATRIX_BOT_CONTROL_ROOM_PARAM": MATRIX_BOT_CONTROL_ROOM_PARAM,
+            "OPENCLAW_STATE_FILE": str(OPENCLAW_STATE_FILE),
+        }
+        rendered = user_data_template
+        for key, value in substitutions.items():
+            rendered = rendered.replace(f"@@{key}@@", value)
+        user_data = ec2.UserData.custom(rendered)
 
         instance = ec2.Instance(
             self,
