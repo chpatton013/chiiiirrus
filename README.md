@@ -487,39 +487,125 @@ DAG. But they can never declare a cyclical dependency.
 ### AWS
 
 - [Foundation Stack](./infra/stacks/foundation_stack.py)
-    - Declares shared resources used by all other stacks.
+    - Account-wide shared infrastructure every other stack imports.
     - Resources:
-        - Hosted Zone and VPC
-        - ECS cluster
-- [Authentik Stack](./infra/stacks/authentik_stack.py)
-    - OIDC identity provider
-    - Resources:
-        - Storage: S3 media bucket, RDS PostGres database
-        - Services: Authentik Server and Worker Fargate service containers
-        - Network: publicly-accessible Application Load Balancer
+        - VPC (public + private-with-egress + private-isolated subnets, no NAT)
+        - Public Route53 hosted zone for `<public_domain>`
+        - Private Route53 hosted zone for `<private_domain>` (VPC-scoped)
+        - ECS cluster (shared by every Fargate service)
+        - AWS Backup Vault (`<project_name>-backups`) every EFS plan
+          writes into
+        - Two ECR pull-through cache rules + their credential secrets
+          (GHCR for `juanfont/headscale` etc., Docker Hub for the rest),
+          wrapped by the `PullThroughCacheRule` construct
 - [Data Stack](./infra/stacks/data_stack.py)
-    - Shared Postgres for stateful services (Authentik, Headscale, ...).
+    - Shared Postgres for stateful services (Authentik, Headscale,
+      Vaultwarden, Matrix).
     - Resources:
-        - RDS PostgreSQL instance in a private-isolated subnet
+        - RDS PostgreSQL 16 instance in a private-isolated subnet, 14-day
+          automated snapshot retention
         - A CDK custom resource (Provider + Lambda using `pg8000`) that
-          creates each logical database named by the stack's `databases=[...]`
-          list if it doesn't exist yet
-- [Headscale Stack](./infra/stacks/headscale_stack.py)
-    - Self-hosted Tailscale control server + Headplane admin UI.
+          creates each logical database named in the stack's
+          `databases=[...]` list if it doesn't exist yet, owned by a
+          per-DB role whose password lives in `<X>/database` Secrets
+          Manager entries
+- [Authentik Stack](./infra/stacks/authentik_stack.py)
+    - OIDC identity provider for every other SSO-aware service.
     - Resources:
-        - Services: `headscale` and `headplane` Fargate services
-        - Network: one public ALB serving both `headscale.<public_domain>`
-          and `headplane.<public_domain>` via host-header routing; Cloud Map
-          private namespace `headscale.local` for Headplane→Headscale
-        - Storage: shared Postgres via DataStack
-        - Init: noise private key materialized from
-          `headscale/noise-private-key` onto a tmpfs volume by an init
-          container before Headscale starts
-        - Custom resource: populates `headscale/admin-api-key` by running a
-          one-shot Fargate task (`headscale apikeys create`) the first time
-          the stack is deployed
-    - MagicDNS base domain: `{headscale.private_subdomain}.{foundation.private_domain}`
+        - Storage: S3 media bucket, dedicated logical DB on the shared RDS
+        - Services: Authentik server + worker Fargate tasks
+        - Network: public ALB at `auth.<public_domain>`
+        - Blueprints: `assets/authentik/blueprints/*.yaml` are deployed
+          to an S3 bucket on each stack update; an init container on
+          both the server and worker tasks `aws s3 sync`s them onto a
+          shared volume on container start. `_stamp_blueprints` hashes
+          the YAML + AK_BP_* env vars so any input change flips the
+          stored blueprint hash and forces the worker to reapply
+        - Provisions OIDC applications + groups + the primary user
+          declaratively via those blueprints (one blueprint per
+          downstream service: tailscale, headscale, headplane,
+          vaultwarden, matrix, rspamd, roundcube)
+- [WebFinger Stack](./infra/stacks/webfinger_stack.py)
+    - Lambda + HTTP API Gateway serving the WebFinger discovery
+      protocol (RFC 7033) for the apex. Tailscale's OIDC discovery
+      flow needs `<public_domain>/.well-known/webfinger?resource=...`
+      to point at Authentik; this is the smallest thing that does
+      that.
+    - Resources:
+        - Lambda (`infra/lambdas/webfinger`) that returns a static
+          JSON response pointing at `auth.<public_domain>`
+        - HTTP API Gateway in front of the Lambda (regional endpoint)
+    - Exports: `api_invoke_domain` — passed into `ApexEdgeStack` via
+      app_builder as an `ApexBehavior` so CloudFront forwards
+      `/.well-known/webfinger*` to this API
+- [Headscale Stack](./infra/stacks/headscale_stack.py)
+    - Self-hosted Tailscale control server + Headplane admin UI +
+      always-on Tailscale exit-node.
+    - Resources:
+        - Services:
+            - `headscale` Fargate service
+            - `headplane` Fargate service
+            - `aws-exit` Fargate service running the Tailscale
+              userspace daemon as a network-namespace exit-node so
+              clients can route VPC-internal traffic through it
+        - Network: public ALB serving both `headscale.<public_domain>`
+          and `headplane.<public_domain>` via host-header routing; a
+          CloudMap private namespace (`headscale.local`) wires
+          Headplane → Headscale internally
+        - Storage: dedicated logical DB on the shared RDS
+        - Init (via `SharedVolumeInit`):
+            1. noise private key materialized from
+               `headscale/noise-private-key` onto a task-scoped volume
+               by an aws-cli init container, then read by the headscale
+               container at `${NOISE_KEY_PATH}`
+            2. headplane config rendered into `/etc/headplane/config.yaml`
+               from a similar init container (script under
+               `assets/headscale/headplane-config-init.sh`)
+        - Custom resources:
+            - `headscale/admin-api-key`: populated by a one-shot
+              Fargate task that runs `headscale apikeys create`
+              the first time the stack is deployed
+            - exit-node preauthkey: another one-shot task that issues
+              a Headscale preauthkey, stores it in
+              `headscale/exit-node/preauthkey`, and that the `aws-exit`
+              service reads at startup
+    - MagicDNS base domain:
+      `{headscale.private_subdomain}.{foundation.private_domain}`
       (e.g. `ts.example.net`)
+- [Matrix Stack](./infra/stacks/matrix_stack.py)
+    - Self-hosted Matrix Synapse homeserver with Authentik SSO.
+      `server_name` is the apex (so MXIDs are `@user:<public_domain>`),
+      with the actual Synapse listener at `matrix.<public_domain>` and
+      `.well-known/matrix/{server,client}` discovery served from
+      ApexEdgeStack.
+    - Resources:
+        - Service: single Fargate task running `matrixdotorg/synapse`,
+          public ALB at `matrix.<public_domain>` (both Client-Server
+          API + federation share the one HTTP listener)
+        - Storage:
+            - dedicated logical DB on the shared RDS
+            - EFS for `/data` (signing key, media store, generated
+              `homeserver.yaml`, registration shared secret), backed up
+              into the shared BackupVault on a daily/weekly/monthly
+              schedule
+        - Init container: renders `homeserver.yaml` from the env-injected
+          DB password + Authentik OIDC client secret, plus a signing
+          key + macaroon/form/registration secrets that are generated
+          on first boot and persisted to EFS. Script lives at
+          `assets/matrix/init.sh`
+        - Custom resource: a one-shot Fargate task registers an
+          `@openclaw-bot:<public_domain>` user via Synapse's
+          shared-secret-nonce admin API, logs in to mint an access
+          token, and writes the token + user_id + device_id to
+          `matrix/openclaw-bot-token` Secrets Manager. The CR's
+          trigger property is a content-derived hash so any change to
+          the bootstrap script or the Lambda code naturally re-fires
+          the registration. Script lives at `assets/matrix/bootstrap.sh`
+        - OIDC SSO via Authentik (one OIDC provider blueprint
+          provisions Matrix as an Authentik application; users sign
+          into Element via the apex Authentik flow)
+        - `bin/db-sql matrix` opens an ECS-Exec shell on the Synapse
+          container with DB env vars in scope for ad-hoc SQL surgery
 - [Mail Stack](./infra/stacks/mail_stack.py)
     - Self-hosted `docker-mailserver` (Postfix + Dovecot + Rspamd +
       ClamAV) on Fargate, with AWS SES as the outbound relay.
@@ -585,53 +671,88 @@ DAG. But they can never declare a cyclical dependency.
       documented under [Post-Deploy Setup](#post-deploy-setup) → "Mail
       server" (SES production-access ticket; PTR records).
 - [OpenClaw Stack](./infra/stacks/openclaw_stack.py)
-    - Agentic assistant platform
+    - Personal-assistant agent platform + the Matrix bot that talks
+      to it over E2EE rooms.
     - Resources:
-        - Storage: EFS volume, backup plan
-        - Services: EC2 instance running openclaw node daemon
-        - Network: VPC
+        - Service: single EC2 instance running the openclaw daemon
+          (gateway listening on a WebSocket-RPC loopback, agents
+          spawning subprocesses as needed) and the openclaw-matrix-bot
+          systemd user unit alongside it
+        - Storage: encrypted EFS mounted at `/data`, holding both
+          openclaw agent state (sessions, memory, workspaces,
+          auth-profiles) and the matrix bot's `cross-signing.json`.
+          `RemovalPolicy.RETAIN` so stack destroys don't nuke any of
+          that. Backup plan writes daily/weekly/monthly into the
+          shared BackupVault.
+        - Network: dedicated single-subnet public VPC (not the
+          foundation VPC). No inbound rules on the instance SG; SSM
+          Session Manager is the only operator access path.
+        - User-data: bootstrap script lives at
+          `assets/openclaw/user-data.sh.tmpl`; CDK substitutes
+          paths + asset URIs + EFS id and hands the rendered string
+          to `ec2.UserData.custom()`
+        - Matrix bot: source under `assets/openclaw_bot/` is shipped
+          as an S3 asset, downloaded + built (`pnpm install` pinned
+          to 10.18.3 + `tsc`) on each fresh instance. The bot reads
+          its access token from `matrix/openclaw-bot-token`, the
+          control-room id from `/openclaw-matrix-bot/control-room-id`
+          SSM parameter, and the openclaw gateway token from
+          `gateway-token` (extracted from the daemon's state JSON by
+          the prestart helper). Connects to Synapse as
+          `@openclaw-bot:<public_domain>` and proxies messages from
+          the allowlisted operator MXID to `openclaw agent --agent
+          main` subprocess invocations.
     - Notes:
-        - I consider this service to be high-risk to run, so I've isolated it in
-          several ways. It has its own VPC, is running on a machine that can
-          only be accessed via SSM connection sessions, and currently has no
-          privileges to communicate with anything internal.
-        - I may want to modify this setup to reuse the foundation VPC and host
-          in Fargate. Will need to get more trust in the system first.
-- [Site Stack](./infra/stacks/site_stack.py)
-    - Static landing page at the apex (`<public_domain>` and
-      `www.<public_domain>`).
+        - This service is high-trust by virtue of running an LLM
+          agent that can hit the openclaw `exec` tool, so it lives
+          in its own VPC and the operator-access path is SSM-only.
+        - The matrix bot is provisioned by a one-shot Custom Resource
+          in MatrixStack, not here -- see Matrix Stack above. The
+          Lambda registers `@openclaw-bot` and writes its access
+          token to Secrets Manager; this stack just consumes those.
+- [Apex Edge Stack](./infra/stacks/apex_edge_stack.py)
+    - Apex CloudFront distribution + S3 origin bucket + ACM cert +
+      apex Route53 records. Pinned to `us-east-1` (CloudFront +
+      ACM-for-CloudFront live there only).
     - Resources:
-        - Storage: private S3 bucket; CloudFront reads via Origin Access
-          Control (no public bucket policy)
-        - CDN: CloudFront distribution with two behaviors —
-            - default (`/*`) → S3 (serves `assets/site/index.html`),
-            - `/.well-known/webfinger*` → WebFingerStack's HTTP API
-              (cache disabled, query string forwarded). Lets the apex
-              continue to serve OIDC discovery for Tailscale while
-              everything else is a static page.
-        - TLS: ACM cert in `us-east-1` (CloudFront's hard requirement),
-          DNS-validated against the public hosted zone, covering both
-          apex and `www.`
+        - Storage: private S3 bucket served via Origin Access Control
+        - CDN: one CloudFront distribution. The default behavior
+          serves `assets/site/` from the bucket. Other behaviors are
+          contributed declaratively by `app_builder.py` via an
+          `ApexBehavior` list (currently:
+          `/.well-known/webfinger*` → WebFinger API Gateway). Other
+          static content is contributed via an `ApexContentDeployment`
+          list (currently: Matrix's `.well-known/matrix/{server,client}`
+          discovery JSON).
+        - TLS: ACM cert validated via DNS against the public hosted
+          zone, covering apex + `www.` SAN.
         - DNS: Route53 A-record aliases at apex and `www.`
-        - Content: `assets/site/index.html` shipped via
-          `BucketDeployment` and CloudFront-invalidated (`/*`) on every
-          deploy
     - Notes:
-        - This stack is pinned to `us-east-1`. FoundationStack and
-          WebFingerStack opt into `cross_region_references=True` so the
-          public hosted zone and the WebFinger API ID can be passed
-          across regions.
-        - The point of this stack is to give `<public_domain>/` a real
-          page. AWS Support reviews the SES production-access request
-          against the URL you supply on the form, and a bare apex that
-          returns 404 reads as suspicious.
+        - ApexEdgeStack itself does NOT know which services
+          contribute behaviors / content; everything flows through
+          app_builder's declarative lists. To add another apex-served
+          service, add an entry to those lists in `app_builder.py`,
+          not to this stack.
+        - The point of this stack is to give `<public_domain>/`
+          something real on the apex. AWS Support reviews the SES
+          production-access request against the URL you supply on
+          the form, and a bare apex that returns 404 reads as
+          suspicious.
 - [Vaultwarden Stack](./infra/stacks/vaultwarden_stack.py)
-    - Self-hosted Bitwarden-compatible password vault
+    - Self-hosted Bitwarden-compatible password vault with Authentik
+      SSO.
     - Resources:
-        - Storage: EFS `/data`, shared Postgres via DataStack
-        - Services: single Fargate task (`vaultwarden/server`) pulled from
-          the Docker Hub pull-through cache
+        - Storage: EFS `/data` (encrypted, RETAIN, with backup plan),
+          dedicated logical DB on the shared RDS
+        - Services: single Fargate task (`vaultwarden/server`) pulled
+          via the Docker Hub pull-through cache
         - Network: public ALB at `vaultwarden.<public_domain>`
+        - OIDC: SSO via Authentik. `SIGNUPS_ALLOWED=true` +
+          `SSO_ONLY=true` -- any Authentik-authenticated user can
+          register on first SSO login, password login + signup are
+          fully disabled
+        - `bin/db-sql vaultwarden` opens an ECS-Exec shell on the
+          container with DB env vars in scope
 - [Webmail Stack](./infra/stacks/webmail_stack.py)
     - Roundcube webmail at `mail.<public_domain>`.
     - Resources:
@@ -646,8 +767,6 @@ DAG. But they can never declare a cyclical dependency.
           all traffic; after SSO, the user signs into Roundcube with
           their IMAP password (`mail/users/<name>`). Two-step today;
           collapsing it into a single-step SSO is a tracked follow-up.
-- Planned public AWS stacks:
-    - Matrix Synapse
 - Planned private AWS stacks:
     - searXNG
 - Planned homelab hosting:
@@ -683,6 +802,3 @@ DAG. But they can never declare a cyclical dependency.
     - EFS and RDS backups
     - host element service
     - host vector identity service for matrix
-    - consider adding a "bastion" host (only reachable over ssm) that has
-    permission to access the rds instance. Or workshop an alternative that
-    doesn't require a separate resource.
