@@ -1,10 +1,9 @@
 """An EFS file system + its security group + N access points, packaged
 as a single construct.
 
-Defaults match the Matrix reference: encrypted at rest, RETAIN on
-removal, general-purpose performance, bursting throughput,
-private-with-egress subnets, SG outbound open. All overridable via
-the explicit kwargs.
+By default: encrypted at rest, RETAIN on removal, general-purpose performance,
+bursting throughput, private-with-egress subnets, SG outbound open. All
+overridable via the explicit kwargs.
 """
 
 from collections.abc import Sequence

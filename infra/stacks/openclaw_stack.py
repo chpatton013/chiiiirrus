@@ -12,13 +12,13 @@ from aws_cdk import (
     aws_backup as backup,
     aws_ec2 as ec2,
     aws_efs as efs,
-    aws_events as events,
     aws_iam as iam,
     aws_s3_assets as s3_assets,
 )
 from constructs import Construct
 
 from ..constructs.shared_efs_volume import EfsAccessPointSpec, SharedEfsVolume
+from ..constructs.standard_backup_plan import StandardBackupPlan
 from ..models.asset_loader import AssetLoader
 from ..models.foundation_exports import FoundationExports
 
@@ -146,8 +146,6 @@ class OpenClawStack(Stack):
                 ),
             ],
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            removal_policy=RemovalPolicy.RETAIN,
-            lifecycle_policy=efs.LifecyclePolicy.AFTER_14_DAYS,
         )
         efs_sg = efs_volume.security_group
         efs_sg.add_ingress_rule(
@@ -337,37 +335,13 @@ class OpenClawStack(Stack):
             ],
         )
 
-        backup_plan = backup.BackupPlan(
+        backup_plan = StandardBackupPlan(
             self,
             "OpenClawBackupPlan",
             backup_plan_name="openclaw-efs-backups",
             backup_vault=foundation.backup_vault,
         )
-
-        backup_plan.add_rule(
-            backup.BackupPlanRule(
-                rule_name="daily-10-days",
-                schedule_expression=events.Schedule.cron(minute="0", hour="5"),
-                delete_after=Duration.days(10),
-            )
-        )
-        backup_plan.add_rule(
-            backup.BackupPlanRule(
-                rule_name="weekly-4-weeks",
-                schedule_expression=events.Schedule.cron(
-                    minute="0", hour="6", week_day="SUN"
-                ),
-                delete_after=Duration.days(28),
-            )
-        )
-        backup_plan.add_rule(
-            backup.BackupPlanRule(
-                rule_name="monthly-3-months",
-                schedule_expression=events.Schedule.cron(minute="0", hour="7", day="1"),
-                delete_after=Duration.days(90),
-            )
-        )
-        backup_plan.add_selection(
+        backup_plan.backup_plan.add_selection(
             "EfsSelection",
             resources=[backup.BackupResource.from_efs_file_system(filesystem)],
         )

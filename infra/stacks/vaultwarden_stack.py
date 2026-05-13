@@ -9,7 +9,6 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_efs as efs,
     aws_elasticloadbalancingv2 as elbv2,
-    aws_events as events,
     aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
@@ -18,6 +17,7 @@ from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
 from ..constructs.shared_efs_volume import EfsAccessPointSpec, SharedEfsVolume
+from ..constructs.standard_backup_plan import StandardBackupPlan
 from ..models.foundation_exports import FoundationExports
 from ..models.data_exports import DataExports
 from ..models.vaultwarden_config import VaultwardenConfig
@@ -229,31 +229,15 @@ class VaultwardenStack(Stack):
         ###
         # Backups. Vault attachments + sqlite-on-EFS (when sqlite is
         # the backend; postgres covered by the shared RDS backup
-        # retention from DataStack). Same cadence as Matrix's plan.
+        # retention from DataStack).
 
-        backup_plan = backup.BackupPlan(
+        backup_plan = StandardBackupPlan(
             self,
             "VaultwardenBackupPlan",
             backup_plan_name="vaultwarden-efs-backups",
             backup_vault=foundation.backup_vault,
         )
-        backup_plan.add_rule(
-            backup.BackupPlanRule(
-                rule_name="daily-10-days",
-                schedule_expression=events.Schedule.cron(minute="0", hour="5"),
-                delete_after=Duration.days(10),
-            )
-        )
-        backup_plan.add_rule(
-            backup.BackupPlanRule(
-                rule_name="weekly-4-weeks",
-                schedule_expression=events.Schedule.cron(
-                    minute="0", hour="6", week_day="SUN"
-                ),
-                delete_after=Duration.days(28),
-            )
-        )
-        backup_plan.add_selection(
+        backup_plan.backup_plan.add_selection(
             "EfsSelection",
             resources=[backup.BackupResource.from_efs_file_system(filesystem)],
         )

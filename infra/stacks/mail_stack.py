@@ -29,6 +29,7 @@ from constructs import Construct
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
 from ..constructs.shared_efs_volume import EfsAccessPointSpec, SharedEfsVolume
+from ..constructs.standard_backup_plan import StandardBackupPlan
 from ..models.asset_loader import AssetLoader
 from ..models.foundation_exports import FoundationExports
 from ..models.mail_config import MailConfig
@@ -621,29 +622,13 @@ class MailStack(Stack):
         # shared FoundationStack vault. Mail volumes are RETAIN, but
         # RETAIN doesn't protect against software bugs deleting files.
 
-        backup_plan = backup.BackupPlan(
+        backup_plan = StandardBackupPlan(
             self,
             "MailBackupPlan",
             backup_plan_name="mail-efs-backups",
             backup_vault=foundation.backup_vault,
         )
-        backup_plan.add_rule(
-            backup.BackupPlanRule(
-                rule_name="daily-7-days",
-                schedule_expression=events.Schedule.cron(minute="0", hour="5"),
-                delete_after=Duration.days(7),
-            )
-        )
-        backup_plan.add_rule(
-            backup.BackupPlanRule(
-                rule_name="weekly-4-weeks",
-                schedule_expression=events.Schedule.cron(
-                    minute="0", hour="6", week_day="SUN"
-                ),
-                delete_after=Duration.days(28),
-            )
-        )
-        backup_plan.add_selection(
+        backup_plan.backup_plan.add_selection(
             "MailEfsSelection",
             resources=[backup.BackupResource.from_efs_file_system(filesystem)],
         )

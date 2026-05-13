@@ -799,6 +799,5 @@ DAG. But they can never declare a cyclical dependency.
           the rotation cost at single-digit-service scale.
     - Get rid of the Imports types and just use kwargs
     - Be specific about which properties we want from foundation and data exports
-    - EFS and RDS backups
     - host element service
     - host vector identity service for matrix
