@@ -1,14 +1,14 @@
 """An EFS file system + its security group + N access points, packaged
 as a single construct.
 
-By default: encrypted at rest, RETAIN on removal, general-purpose performance,
-bursting throughput, private subnets with egress, SG outbound open. Anything
-else can be overridden via `**kwargs`, which are forwarded to `efs.FileSystem`.
+Defaults match the Matrix reference: encrypted at rest, RETAIN on
+removal, general-purpose performance, bursting throughput,
+private-with-egress subnets, SG outbound open. All overridable via
+the explicit kwargs.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from aws_cdk import (
     RemovalPolicy,
@@ -36,17 +36,6 @@ class EfsAccessPointSpec:
     posix_user: efs.PosixUser | None = None
 
 
-@dataclass(frozen=True)
-class SharedEfsVolumeAccessPoints:
-    """Helper container giving callers dict-like access to the
-    construct's access points by spec id."""
-
-    by_id: dict[str, efs.AccessPoint] = field(default_factory=dict)
-
-    def __getitem__(self, key: str) -> efs.AccessPoint:
-        return self.by_id[key]
-
-
 class SharedEfsVolume(Construct):
     def __init__(
         self,
@@ -55,39 +44,42 @@ class SharedEfsVolume(Construct):
         *,
         vpc: ec2.IVpc,
         access_points: Sequence[EfsAccessPointSpec],
-        **kwargs: Any,
+        vpc_subnets: ec2.SubnetSelection | None = None,
+        encrypted: bool = True,
+        removal_policy: RemovalPolicy = RemovalPolicy.RETAIN,
+        performance_mode: efs.PerformanceMode = efs.PerformanceMode.GENERAL_PURPOSE,
+        throughput_mode: efs.ThroughputMode = efs.ThroughputMode.BURSTING,
+        lifecycle_policy: efs.LifecyclePolicy | None = None,
     ) -> None:
         super().__init__(scope, construct_id)
+
+        if vpc_subnets is None:
+            vpc_subnets = ec2.SubnetSelection(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            )
 
         self.security_group = ec2.SecurityGroup(
             self, "SecurityGroup", vpc=vpc, allow_all_outbound=True
         )
-
-        fs_kwargs: dict[str, Any] = dict(
+        self.filesystem = efs.FileSystem(
+            self,
+            "FileSystem",
             vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-            ),
+            vpc_subnets=vpc_subnets,
             security_group=self.security_group,
-            encrypted=True,
-            removal_policy=RemovalPolicy.RETAIN,
-            performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
-            throughput_mode=efs.ThroughputMode.BURSTING,
+            encrypted=encrypted,
+            removal_policy=removal_policy,
+            performance_mode=performance_mode,
+            throughput_mode=throughput_mode,
+            lifecycle_policy=lifecycle_policy,
         )
-        fs_kwargs.update(kwargs)
-        self.filesystem = efs.FileSystem(self, "FileSystem", **fs_kwargs)
 
         self.access_points: dict[str, efs.AccessPoint] = {}
         for spec in access_points:
-            ap_kwargs: dict[str, Any] = {}
-            if spec.client_token is not None:
-                ap_kwargs["client_token"] = spec.client_token
-            if spec.create_acl is not None:
-                ap_kwargs["create_acl"] = spec.create_acl
-            if spec.path is not None:
-                ap_kwargs["path"] = spec.path
-            if spec.posix_user is not None:
-                ap_kwargs["posix_user"] = spec.posix_user
             self.access_points[spec.id] = self.filesystem.add_access_point(
-                spec.id, **ap_kwargs
+                spec.id,
+                client_token=spec.client_token,
+                create_acl=spec.create_acl,
+                path=spec.path,
+                posix_user=spec.posix_user,
             )
