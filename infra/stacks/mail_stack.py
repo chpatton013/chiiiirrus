@@ -31,6 +31,7 @@ from ..constructs.public_http_alb import PublicHttpAlb
 from ..models.asset_loader import AssetLoader
 from ..models.foundation_exports import FoundationExports
 from ..models.mail_config import MailConfig
+from ..models.mail_exports import MailExports
 
 DKIM_SELECTOR = "s1"
 CONFIG_MOUNT = "/tmp/docker-mailserver"
@@ -65,17 +66,6 @@ class MailImports:
     # authorize/token/userinfo URLs and reference the OIDC secret.
     authentik_issuer_base: str
     rspamd_redirect_uri: str
-
-
-@dataclass(frozen=True)
-class MailExports:
-    # Mail's EFS file system + the access point reserved for Roundcube
-    # state (sqlite + config). WebmailStack mounts this access point so
-    # Roundcube state lives on the same EFS as the mail server,
-    # bringing it under the same backup plan.
-    efs_filesystem: efs.IFileSystem
-    efs_security_group: ec2.ISecurityGroup
-    roundcube_access_point: efs.IAccessPoint
 
 
 class MailStack(Stack):
@@ -141,6 +131,8 @@ class MailStack(Stack):
         ###
         # EFS - one filesystem, three access points (mail / config / clamav).
 
+        # AGENT TODO: Use the construct described in MatrixStack to dedupe EFS
+        # definition
         efs_sg = ec2.SecurityGroup(
             self, "EfsSecurityGroup", vpc=foundation.vpc, allow_all_outbound=True
         )
