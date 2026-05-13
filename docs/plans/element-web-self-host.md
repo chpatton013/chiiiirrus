@@ -21,8 +21,7 @@ release introduces a regression.
 
 ## Scope
 
-- New `ElementWebStack` serving `element.<public_domain>` (or
-  `chat.<public_domain>` — see open decisions).
+- New `ElementWebStack` serving `element.<public_domain>`
 - HTTPS via ACM cert, fronted by CloudFront with default
   behavior serving Element's static files from a private S3 bucket
   (Origin Access Control, no public-read on the bucket).
@@ -37,19 +36,10 @@ release introduces a regression.
 
 ### Element release fetching
 
-Two options:
-
-1. **Build-time download.** The CDK asset is a script that runs at
-   synth time, downloads `element-v<version>.tar.gz` from GitHub
-   releases, unpacks, and produces a directory CDK uploads to S3.
-   Verifies the published `.asc` signature against the Element
-   release key.
-2. **Pre-bundled.** Check in `assets/element-web/dist/` at the
-   pinned version, commit-bump on each version refresh.
-
-Option 1 keeps the repo small + makes version bumps a one-line
-config change. Option 2 is fully reproducible but checks in
-~100 MB of compiled JS. **Recommend option 1.**
+**Build-time download.** The CDK asset is a script that runs at synth time,
+downloads `element-v<version>.tar.gz` from GitHub releases, unpacks, and
+produces a directory CDK uploads to S3. Verifies the published `.asc` signature
+against the Element release key.
 
 ### config.json template
 
@@ -98,20 +88,24 @@ substituted at CDK synth time with the homeserver FQDN.
 - **Subdomain.** `element.<domain>` is the obvious name but
   reinforces the Element-brand framing. `chat.<domain>` is
   generic. `web.<domain>` is shorter. Pick one and commit.
-- **Build-time download vs. checked-in dist.** See above.
+  - Let's go with `chat.<domain>`
 - **Auto-update mechanism.** Element releases land weekly. The
   pin-bump becomes a manual cadence; this is fine for a personal
   deployment.
+  - I'm imagining a system that auto-updates every week (or every month,
+  whatever), but has the ability to pin to a specific version if I find a
+  problem with the automated deployment.
 - **Self-hosted Element call backend?** Element-Call is a
   separate service for voice/video rooms; if we want
   voice/video in our Matrix rooms, we'd also need a TURN server
   and the call backend. Probably out of scope for v1.
+  - I'm going to want this, but let's leave it as a follow-up.
 
 ## Verification
 
 - `bin/cdk synth ElementWebStack` produces a template that
   references the asset.
-- After deploy, `https://element.<public_domain>` loads the
+- After deploy, `https://chat.<public_domain>` loads the
   client; `/config.json` shows the homeserver pointing at
   `matrix.<public_domain>`.
 - Sign in via SSO (Authentik) round-trips correctly; reload

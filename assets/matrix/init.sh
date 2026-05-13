@@ -91,6 +91,14 @@ oidc_providers:
         localpart_template: "{{ user.preferred_username }}"
         display_name_template: "{{ user.name }}"
         email_template: "{{ user.email }}"
+
+# Allow the self-hosted Element-Web at chat.<server> to be a
+# valid post-SSO redirect target. Synapse defaults to refusing
+# any redirect URL not on this list. Pattern is prefix-match,
+# not regex.
+sso:
+  client_whitelist:
+    - "${ELEMENT_WEB_BASE_URL}"
 EOF
 
 # 5. Minimal log config so Synapse logs to stdout (CloudWatch picks

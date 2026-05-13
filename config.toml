@@ -154,3 +154,10 @@ secret_name = "matrix/database"
 collation = "C"
 ctype = "C"
 template = "template0"
+
+[element_web]
+# Self-hosted Element-Web (React SPA) at chat.<public_domain>.
+# `version = "latest"` resolves to the newest GitHub release at
+# every synth; pin to e.g. "v1.11.105" if a release regresses.
+subdomain = "chat"
+version = "latest"

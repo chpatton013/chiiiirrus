@@ -15,6 +15,7 @@ from .stacks.apex_edge_stack import (
 )
 from .stacks.authentik_stack import AuthentikImports, AuthentikStack
 from .stacks.data_stack import DataImports, DataStack
+from .stacks.element_web_stack import ElementWebImports, ElementWebStack
 from .stacks.foundation_stack import FoundationImports, FoundationStack
 from .stacks.headscale_stack import HeadscaleImports, HeadscaleStack
 from .stacks.mail_stack import MailImports, MailStack
@@ -49,6 +50,8 @@ def build_app(
     roundcube_redirect_uri = f"https://{roundcube_fqdn}/index.php/login/oauth"
     matrix_fqdn = f"{cfg.matrix.subdomain}.{cfg.foundation.public_domain}"
     matrix_redirect_uri = f"https://{matrix_fqdn}/_synapse/client/oidc/callback"
+    element_web_fqdn = f"{cfg.element_web.subdomain}.{cfg.foundation.public_domain}"
+    element_web_base_url = f"https://{element_web_fqdn}/"
 
     # CloudFront / ACM-for-CloudFront only live in us-east-1, so
     # ApexEdgeStack is pinned there. Everything else stays in the
@@ -167,6 +170,7 @@ def build_app(
             data=data,
             assets=assets,
             authentik_issuer_base=authentik_issuer_base,
+            element_web_base_url=element_web_base_url,
         ),
         env=env,
     )
@@ -219,6 +223,18 @@ def build_app(
                     prune=False,
                 ),
             ],
+        ),
+        env=apex_edge_env,
+        cross_region_references=True,
+    )
+    ElementWebStack(
+        app,
+        "ElementWebStack",
+        imports=ElementWebImports(
+            cfg=cfg.element_web,
+            foundation=foundation,
+            assets=assets,
+            matrix_fqdn=matrix_fqdn,
         ),
         env=apex_edge_env,
         cross_region_references=True,

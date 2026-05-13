@@ -6,6 +6,7 @@ from typing import Any, Self
 from .apex_edge_config import ApexEdgeConfig
 from .authentik_config import AuthentikConfig
 from .data_config import DataConfig
+from .element_web_config import ElementWebConfig
 from .foundation_config import FoundationConfig
 from .headscale_config import HeadscaleConfig
 from .mail_config import MailConfig
@@ -27,6 +28,7 @@ class AppConfig:
     matrix: MatrixConfig
     apex_edge: ApexEdgeConfig
     webmail: WebmailConfig
+    element_web: ElementWebConfig
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
@@ -41,6 +43,7 @@ class AppConfig:
             matrix=MatrixConfig.load(data["matrix"]),
             apex_edge=ApexEdgeConfig.load(data["apex_edge"]),
             webmail=WebmailConfig.load(data["webmail"]),
+            element_web=ElementWebConfig.load(data["element_web"]),
         )
 
 

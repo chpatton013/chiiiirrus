@@ -55,6 +55,11 @@ class MatrixImports:
     data: DataExports
     assets: AssetLoader
     authentik_issuer_base: str
+    # Base URL of the self-hosted Element-Web client. Added to
+    # Synapse's sso.client_whitelist so Element can be the
+    # post-SSO redirect target (Synapse refuses redirects to
+    # anything not on the list by default).
+    element_web_base_url: str
 
 
 class MatrixStack(Stack):
@@ -131,6 +136,7 @@ class MatrixStack(Stack):
             "DB_NAME": cfg.db.name,
             "OIDC_ISSUER": oidc_issuer,
             "REMOTE_MEDIA_LIFETIME": cfg.remote_media_lifetime,
+            "ELEMENT_WEB_BASE_URL": imports.element_web_base_url,
         }
         # Init container env additions only it needs: DB_USER plain,
         # DB_PASSWORD and OIDC_CLIENT_ID/SECRET as ECS secrets.

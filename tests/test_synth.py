@@ -79,6 +79,9 @@ class TestSynth(unittest.TestCase):
     def test_matrix_stack(self) -> None:
         self.assertIn("Resources", self._template("MatrixStack"))
 
+    def test_element_web_stack(self) -> None:
+        self.assertIn("Resources", self._template("ElementWebStack"))
+
 
 if __name__ == "__main__":
     unittest.main()
