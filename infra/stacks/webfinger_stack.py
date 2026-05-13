@@ -29,8 +29,7 @@ class WebFingerExports:
     # Regional invoke domain for the HTTP API (default stage, no path
     # prefix). app_builder.py wraps this in an `ApexBehavior` so
     # ApexEdgeStack's CloudFront distribution routes
-    # `/.well-known/webfinger*` here. WebFinger itself stays
-    # unaware that its API is fronted by the apex distribution.
+    # `/.well-known/webfinger*` here.
     api_invoke_domain: str
 
 

@@ -258,53 +258,14 @@ class HeadscaleStack(Stack):
             f"http://{SERVICE_DISCOVERY_SERVICE}"
             f".{SERVICE_DISCOVERY_NAMESPACE}:{HEADSCALE_HTTP_PORT}"
         )
-        # Fetch steps use ${{VAR}} (CDK escaping for literal ${VAR} in shell).
-        # Secrets are JSON {"secret": "..."} so .secret is extracted via jq.
-        _fetch_cookie = f'COOKIE="$(aws secretsmanager get-secret-value --secret-id "${{HP_COOKIE_NAME}}" --query SecretString --output text | jq -r .secret)"'
-        _fetch_apikey = f'APIKEY="$(aws secretsmanager get-secret-value --secret-id "${{HP_APIKEY_NAME}}" --query SecretString --output text | jq -r .secret)"'
-        _fetch_oidc = f'OIDC="$(aws secretsmanager get-secret-value --secret-id "${{HP_OIDC_NAME}}" --query SecretString --output text)"'
-        _parse_oidc = 'CLIENT_ID="$(echo "$OIDC" | jq -r .client_id)"'
-        _parse_secret = 'CLIENT_SECRET="$(echo "$OIDC" | jq -r .client_secret)"'
-        _export = "export COOKIE APIKEY CLIENT_ID CLIENT_SECRET"
-        # Python heredoc: 'PYEOF' prevents shell expansion inside Python code.
-        _pyeof = "\n".join(
-            [
-                "python3 << 'PYEOF'",
-                "import json, os",
-                "cfg = {",
-                "    'server': {'host': '0.0.0.0', 'port': 3000,",
-                "               'cookie_secret': os.environ['COOKIE'], 'cookie_secure': False, 'data_path': '/tmp/headplane/'},",
-                "    'headscale': {'url': os.environ['HP_HEADSCALE_URL'], 'config_strict': False},",
-                "    'oidc': {",
-                "        'issuer': os.environ['HP_OIDC_ISSUER'],",
-                "        'client_id': os.environ['CLIENT_ID'],",
-                "        'client_secret': os.environ['CLIENT_SECRET'],",
-                "        'token_endpoint_auth_method': 'client_secret_basic',",
-                "        'disable_api_key_login': False,",
-                "        'headscale_api_key': os.environ['APIKEY'],",
-                "    },",
-                "}",
-                "open('/etc/headplane/config.yaml', 'w').write(json.dumps(cfg, indent=2))",
-                "print('headplane config.yaml written')",
-                "PYEOF",
-            ]
-        )
         SharedVolumeInit(
             self,
             "HeadplaneConfigInit",
             service=headplane_service,
             volume_name=HEADPLANE_CONFIG_VOLUME,
             mount_path=HEADPLANE_CONFIG_MOUNT_PATH,
-            # AGENT TODO: move this to a script in assets/
             commands=[
-                "set -eu",
-                _fetch_cookie,
-                _fetch_apikey,
-                _fetch_oidc,
-                _parse_oidc,
-                _parse_secret,
-                _export,
-                _pyeof,
+                imports.assets.read_text("headscale", "headplane-config-init.sh")
             ],
             environment={
                 "HP_COOKIE_NAME": "headplane/cookie-secret",
