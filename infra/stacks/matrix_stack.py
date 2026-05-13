@@ -56,163 +56,6 @@ class MatrixImports:
     authentik_issuer_base: str
 
 
-# Bootstrap script for the one-shot bot-account task. Runs on the
-# Synapse image so it can use the bundled `register_new_matrix_user`
-# script. Reads the registration_shared_secret out of the
-# init-container-rendered homeserver.yaml on EFS, registers
-# `@openclaw-bot:<server_name>` with a fresh random password, then
-# logs in to obtain an access token + device id and emits a single
-# JSON line on stdout for the bootstrap Lambda to parse and write
-# into Secrets Manager.
-_BOOTSTRAP_SCRIPT = r"""
-set -euo pipefail
-BOT_USERNAME=openclaw-bot
-BOT_PASSWORD="$(head -c 32 /dev/urandom | base64 | tr -d '\n=+/')"
-
-python -m synapse._scripts.register_new_matrix_user \
-  -c /data/homeserver.yaml \
-  -u "${BOT_USERNAME}" \
-  -p "${BOT_PASSWORD}" \
-  --no-admin \
-  "${HOMESERVER_URL}" >&2
-
-curl -fsS -X POST "${HOMESERVER_URL}/_matrix/client/v3/login" \
-  -H "Content-Type: application/json" \
-  -d "{\"type\":\"m.login.password\",\"user\":\"${BOT_USERNAME}\",\"password\":\"${BOT_PASSWORD}\",\"initial_device_display_name\":\"openclaw-bot\"}" \
-| python3 -c "
-import json, sys
-r = json.load(sys.stdin)
-print(json.dumps({'token': r['access_token'], 'user_id': r['user_id'], 'device_id': r.get('device_id', '')}))
-"
-"""
-
-
-# Init script: rendered as the init container's command. Generates
-# the Synapse signing key + one-time secrets on first boot, writes
-# DB password and OIDC client secret from ECS-injected env vars onto
-# EFS (so Synapse's homeserver.yaml can `_path`-reference them
-# instead of inlining), and renders /data/homeserver.yaml from a
-# heredoc template. Idempotent: re-runs leave existing keys/secrets
-# untouched and only re-render the YAML.
-_INIT_SCRIPT = r"""
-set -euo pipefail
-
-DATA=/data
-SERVER_NAME="${SYNAPSE_SERVER_NAME}"
-SIGNING_KEY="${DATA}/${SERVER_NAME}.signing.key"
-
-# 1. Signing key (idempotent). Synapse needs this for federation
-#    event signing and for E2E key cross-signing.
-if [ ! -f "${SIGNING_KEY}" ]; then
-  python -m synapse._scripts.generate_signing_key -o "${SIGNING_KEY}"
-fi
-
-# 2. One-time random secrets: macaroon (auth tokens), form (CSRF),
-#    registration_shared_secret (used by the bot bootstrap CR in a
-#    future phase to register the OpenClaw bot account).
-for f in macaroon_secret_key form_secret registration_shared_secret; do
-  if [ ! -f "${DATA}/${f}" ]; then
-    head -c 32 /dev/urandom | base64 | tr -d '\n=' >"${DATA}/${f}"
-    chmod 0600 "${DATA}/${f}"
-  fi
-done
-MACAROON_KEY="$(cat "${DATA}/macaroon_secret_key")"
-FORM_SECRET="$(cat "${DATA}/form_secret")"
-REGISTRATION_SHARED_SECRET="$(cat "${DATA}/registration_shared_secret")"
-
-# 3. Render homeserver.yaml. Bash interpolates ${...}; Synapse's
-#    own template syntax `{{ user.preferred_username }}` passes
-#    through as a literal string for Synapse to evaluate at OIDC
-#    callback time. DB password and OIDC client_secret are inlined
-#    from ECS-injected env vars - Synapse's database.args go
-#    straight to psycopg2 which has no `password_path` knob, and
-#    the YAML lives on an encrypted EFS access point restricted to
-#    uid/gid 991 mode 750, so the exposure is equivalent to the
-#    macaroon/form keys already in this file.
-cat >"${DATA}/homeserver.yaml" <<EOF
-server_name: "${SERVER_NAME}"
-public_baseurl: "${PUBLIC_BASEURL}"
-pid_file: /data/homeserver.pid
-
-listeners:
-  - port: ${SYNAPSE_PORT}
-    type: http
-    x_forwarded: true
-    bind_addresses: ['0.0.0.0']
-    resources:
-      - names: [client, federation]
-        compress: false
-
-database:
-  name: psycopg2
-  args:
-    user: ${DB_USER}
-    password: "${DB_PASSWORD}"
-    host: ${DB_HOST}
-    port: ${DB_PORT}
-    database: ${DB_NAME}
-    sslmode: require
-    cp_min: 5
-    cp_max: 10
-
-log_config: /data/log.config
-media_store_path: /data/media_store
-signing_key_path: ${SIGNING_KEY}
-
-trusted_key_servers:
-  - server_name: matrix.org
-
-macaroon_secret_key: "${MACAROON_KEY}"
-form_secret: "${FORM_SECRET}"
-registration_shared_secret: "${REGISTRATION_SHARED_SECRET}"
-
-enable_registration: false
-enable_registration_without_verification: false
-serve_server_wellknown: false
-report_stats: false
-suppress_key_server_warning: true
-
-media_retention:
-  remote_media_lifetime: ${REMOTE_MEDIA_LIFETIME}
-
-oidc_providers:
-  - idp_id: authentik
-    idp_name: Authentik
-    issuer: "${OIDC_ISSUER}"
-    client_id: "${OIDC_CLIENT_ID}"
-    client_secret: "${OIDC_CLIENT_SECRET}"
-    scopes: [openid, profile, email]
-    user_mapping_provider:
-      config:
-        localpart_template: "{{ user.preferred_username }}"
-        display_name_template: "{{ user.name }}"
-        email_template: "{{ user.email }}"
-EOF
-
-# 5. Minimal log config so Synapse logs to stdout (CloudWatch picks
-#    it up via the awslogs driver).
-cat >"${DATA}/log.config" <<'EOF'
-version: 1
-formatters:
-  precise:
-    format: '%(asctime)s - %(name)s - %(lineno)d - %(levelname)s - %(request)s - %(message)s'
-handlers:
-  console:
-    class: logging.StreamHandler
-    formatter: precise
-loggers:
-  synapse.storage.SQL:
-    level: INFO
-root:
-  level: INFO
-  handlers: [console]
-disable_existing_loggers: false
-EOF
-
-echo "matrix-init: homeserver.yaml rendered for ${SERVER_NAME}"
-"""
-
-
 class MatrixStack(Stack):
     def __init__(
         self,
@@ -227,6 +70,12 @@ class MatrixStack(Stack):
         cfg = imports.cfg
         foundation = imports.foundation
         data = imports.data
+
+        # Init + bot-bootstrap scripts live under assets/matrix/ so
+        # shellcheck/shfmt + future editors can inspect them as real
+        # files instead of as r-strings inside this Python module.
+        init_script = imports.assets.read_text("matrix", "init.sh")
+        bootstrap_script = imports.assets.read_text("matrix", "bootstrap.sh")
 
         # Matrix `server_name` is the apex; the listener lives at
         # matrix.<public_domain>. .well-known delegation in SiteStack
@@ -249,6 +98,25 @@ class MatrixStack(Stack):
         # EFS for /data (signing key, media store, log config,
         # registration shared secret, generated homeserver.yaml).
 
+        # AGENT TODO: Encapsulate this SG, FS, and AP as a construct that handls
+        # all that for us.
+        # The following kwargs should use these default values:
+        # - allow_all_outbound=True
+        # - vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+        # - encrypted=True,
+        # - removal_policy=RemovalPolicy.RETAIN,
+        # - performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
+        # - throughput_mode=efs.ThroughputMode.BURSTING,
+        # The following kwargs need to be explicitly provided:
+        # - vpc
+        # - access_points
+        # All other kwargs should be taken as a ** group and passed to efs.FileSystem
+        # access_points should be a list of dataclass objects that we define
+        # with the following properties:
+        # - id, client_token, create_acl, path, posix_user (all optional except id)
+        # The construct should assign the following member properties:
+        # - security_group
+        # - filesystem
         efs_sg = ec2.SecurityGroup(
             self, "EfsSecurityGroup", vpc=foundation.vpc, allow_all_outbound=True
         )
@@ -363,7 +231,7 @@ class MatrixStack(Stack):
             image=synapse_image,
             essential=False,
             entry_point=["bash", "-c"],
-            command=[_INIT_SCRIPT],
+            command=[init_script],
             environment=init_environment,
             secrets=init_secrets,
             logging=ecs.LogDrivers.aws_logs(
@@ -555,7 +423,7 @@ class MatrixStack(Stack):
             image=synapse_image,
             essential=True,
             entry_point=["bash", "-c"],
-            command=[_BOOTSTRAP_SCRIPT],
+            command=[bootstrap_script],
             environment={"HOMESERVER_URL": f"https://{listener_fqdn}"},
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="matrix-bot-bootstrap",
@@ -628,7 +496,7 @@ class MatrixStack(Stack):
                 imports.assets.lambda_path("matrix_bot_account"), "**/*"
             ),
             env={"HOMESERVER_URL": f"https://{listener_fqdn}"},
-            extra=_BOOTSTRAP_SCRIPT,
+            extra=bootstrap_script,
         )
         bootstrap_resource = CustomResource(
             self,
