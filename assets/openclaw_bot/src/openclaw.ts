@@ -20,6 +20,9 @@ interface ForwardOpts {
   gatewayToken: string;
 }
 
+// Fallback flat-shape fields, checked only if the canonical
+// result.payloads[].text path doesn't match. Lets the bot survive
+// future openclaw schema tweaks without an immediate code change.
 const REPLY_FIELDS = [
   "reply",
   "message",
@@ -33,6 +36,29 @@ function extractReply(parsed: unknown): string | null {
   if (typeof parsed === "string") return parsed;
   if (!parsed || typeof parsed !== "object") return null;
   const obj = parsed as Record<string, unknown>;
+
+  // Canonical OpenClaw 2026.5 shape:
+  //   { runId, status, summary,
+  //     result: { payloads: [{ text, mediaUrl }, ...], meta: {...} } }
+  // Concatenate all payload texts (one turn can emit multiple) so
+  // multi-payload replies survive intact.
+  const result = obj.result;
+  if (result && typeof result === "object") {
+    const payloads = (result as Record<string, unknown>).payloads;
+    if (Array.isArray(payloads)) {
+      const texts: string[] = [];
+      for (const p of payloads) {
+        if (p && typeof p === "object") {
+          const t = (p as Record<string, unknown>).text;
+          if (typeof t === "string" && t.trim().length > 0) {
+            texts.push(t);
+          }
+        }
+      }
+      if (texts.length > 0) return texts.join("\n\n");
+    }
+  }
+
   for (const f of REPLY_FIELDS) {
     const v = obj[f];
     if (typeof v === "string" && v.trim().length > 0) return v;
