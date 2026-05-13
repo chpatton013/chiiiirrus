@@ -28,6 +28,7 @@ from constructs import Construct
 
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
+from ..constructs.shared_efs_volume import EfsAccessPointSpec, SharedEfsVolume
 from ..models.asset_loader import AssetLoader
 from ..models.foundation_exports import FoundationExports
 from ..models.mail_config import MailConfig
@@ -129,39 +130,50 @@ class MailStack(Stack):
         )
 
         ###
-        # EFS - one filesystem, three access points (mail / config / clamav).
+        # EFS - one filesystem, four access points (mail / config /
+        # clamav / roundcube). All run as uid/gid 0 with 0750 perms
+        # because the docker-mailserver image's containerized processes
+        # need root-owned dirs to install themselves into.
 
-        # AGENT TODO: Use the construct described in MatrixStack to dedupe EFS
-        # definition
-        efs_sg = ec2.SecurityGroup(
-            self, "EfsSecurityGroup", vpc=foundation.vpc, allow_all_outbound=True
-        )
-        filesystem = efs.FileSystem(
+        ap_acl = efs.Acl(owner_uid="0", owner_gid="0", permissions="0750")
+        ap_posix = efs.PosixUser(uid="0", gid="0")
+        efs_volume = SharedEfsVolume(
             self,
             "MailFs",
             vpc=foundation.vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-            ),
-            security_group=efs_sg,
-            encrypted=True,
-            removal_policy=RemovalPolicy.RETAIN,
-            performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
-            throughput_mode=efs.ThroughputMode.BURSTING,
+            access_points=[
+                EfsAccessPointSpec(
+                    id="MailAp",
+                    path="/dms/mail",
+                    create_acl=ap_acl,
+                    posix_user=ap_posix,
+                ),
+                EfsAccessPointSpec(
+                    id="ConfigAp",
+                    path="/dms/config",
+                    create_acl=ap_acl,
+                    posix_user=ap_posix,
+                ),
+                EfsAccessPointSpec(
+                    id="ClamavAp",
+                    path="/dms/clamav",
+                    create_acl=ap_acl,
+                    posix_user=ap_posix,
+                ),
+                EfsAccessPointSpec(
+                    id="RoundcubeAp",
+                    path="/dms/roundcube",
+                    create_acl=ap_acl,
+                    posix_user=ap_posix,
+                ),
+            ],
         )
-
-        def _ap(name: str, path: str) -> efs.IAccessPoint:
-            return filesystem.add_access_point(
-                name,
-                path=path,
-                create_acl=efs.Acl(owner_uid="0", owner_gid="0", permissions="0750"),
-                posix_user=efs.PosixUser(uid="0", gid="0"),
-            )
-
-        ap_mail = _ap("MailAp", "/dms/mail")
-        ap_config = _ap("ConfigAp", "/dms/config")
-        ap_clamav = _ap("ClamavAp", "/dms/clamav")
-        ap_roundcube = _ap("RoundcubeAp", "/dms/roundcube")
+        efs_sg = efs_volume.security_group
+        filesystem = efs_volume.filesystem
+        ap_mail = efs_volume.access_points["MailAp"]
+        ap_config = efs_volume.access_points["ConfigAp"]
+        ap_clamav = efs_volume.access_points["ClamavAp"]
+        ap_roundcube = efs_volume.access_points["RoundcubeAp"]
 
         ###
         # NLB + Fargate service.

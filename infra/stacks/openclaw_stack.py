@@ -18,6 +18,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from ..constructs.shared_efs_volume import EfsAccessPointSpec, SharedEfsVolume
 from ..models.asset_loader import AssetLoader
 from ..models.foundation_exports import FoundationExports
 
@@ -122,35 +123,35 @@ class OpenClawStack(Stack):
             description="OpenClaw instance security group",
         )
 
-        efs_sg = ec2.SecurityGroup(
-            self,
-            "EfsSecurityGroup",
-            vpc=vpc,
-            allow_all_outbound=True,
-            description="EFS security group",
-        )
-        efs_sg.add_ingress_rule(
-            instance_sg, ec2.Port.tcp(2049), "NFS from OpenClaw instance"
-        )
-
-        filesystem = efs.FileSystem(
+        # OpenClaw's VPC is single-tier public (no NAT, no isolated
+        # subnets), so override the construct's PRIVATE_WITH_EGRESS
+        # default. RemovalPolicy.DESTROY is intentional: the EFS holds
+        # /data/openclaw state we're happy to rebuild on stack
+        # recreate, unlike the RETAIN'd EFS on MatrixStack/etc.
+        efs_volume = SharedEfsVolume(
             self,
             "OpenClawEfs",
             vpc=vpc,
-            security_group=efs_sg,
-            encrypted=True,
+            access_points=[
+                EfsAccessPointSpec(
+                    id="OpenClawAccessPoint",
+                    path="/openclaw",
+                    create_acl=efs.Acl(
+                        owner_gid="1000", owner_uid="1000", permissions="750"
+                    ),
+                    posix_user=efs.PosixUser(gid="1000", uid="1000"),
+                ),
+            ],
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
             removal_policy=RemovalPolicy.DESTROY,
             lifecycle_policy=efs.LifecyclePolicy.AFTER_14_DAYS,
-            performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
-            throughput_mode=efs.ThroughputMode.BURSTING,
         )
-
-        access_point = filesystem.add_access_point(
-            "OpenClawAccessPoint",
-            path="/openclaw",
-            create_acl=efs.Acl(owner_gid="1000", owner_uid="1000", permissions="750"),
-            posix_user=efs.PosixUser(gid="1000", uid="1000"),
+        efs_sg = efs_volume.security_group
+        efs_sg.add_ingress_rule(
+            instance_sg, ec2.Port.tcp(2049), "NFS from OpenClaw instance"
         )
+        filesystem = efs_volume.filesystem
+        access_point = efs_volume.access_points["OpenClawAccessPoint"]
 
         role = iam.Role(
             self,

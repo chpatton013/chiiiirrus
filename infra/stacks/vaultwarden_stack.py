@@ -15,6 +15,7 @@ from constructs import Construct
 from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.public_http_alb import PublicHttpAlb
+from ..constructs.shared_efs_volume import EfsAccessPointSpec, SharedEfsVolume
 from ..models.foundation_exports import FoundationExports
 from ..models.data_exports import DataExports
 from ..models.vaultwarden_config import VaultwardenConfig
@@ -64,30 +65,24 @@ class VaultwardenStack(Stack):
         ###
         # EFS for /data
 
-        # AGENT TODO: Use the construct described in MatrixStack to dedupe EFS
-        # definition
-        efs_sg = ec2.SecurityGroup(
-            self, "EfsSecurityGroup", vpc=foundation.vpc, allow_all_outbound=True
-        )
-        filesystem = efs.FileSystem(
+        efs_volume = SharedEfsVolume(
             self,
             "DataFs",
             vpc=foundation.vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-            ),
-            security_group=efs_sg,
-            encrypted=True,
-            removal_policy=RemovalPolicy.RETAIN,
-            performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
-            throughput_mode=efs.ThroughputMode.BURSTING,
+            access_points=[
+                EfsAccessPointSpec(
+                    id="DataAccessPoint",
+                    path="/vaultwarden",
+                    create_acl=efs.Acl(
+                        owner_gid="1000", owner_uid="1000", permissions="750"
+                    ),
+                    posix_user=efs.PosixUser(gid="1000", uid="1000"),
+                ),
+            ],
         )
-        access_point = filesystem.add_access_point(
-            "DataAccessPoint",
-            path="/vaultwarden",
-            create_acl=efs.Acl(owner_gid="1000", owner_uid="1000", permissions="750"),
-            posix_user=efs.PosixUser(gid="1000", uid="1000"),
-        )
+        efs_sg = efs_volume.security_group
+        filesystem = efs_volume.filesystem
+        access_point = efs_volume.access_points["DataAccessPoint"]
 
         ###
         # Service
@@ -136,9 +131,7 @@ class VaultwardenStack(Stack):
 
         # Vaultwarden needs DATABASE_URL as a single string. ECS secrets cannot
         # be interpolated into other env vars, so assemble it in a shell wrapper
-        # before exec'ing the image's default entrypoint. Split into
-        # entry_point/command so the shell is the ENTRYPOINT and the script
-        # is its CMD argument, matching Docker convention.
+        # before exec'ing the image's default entrypoint.
         service = PrivateEgressFargateService(
             self,
             "Service",

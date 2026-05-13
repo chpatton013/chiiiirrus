@@ -25,6 +25,7 @@ from ..constructs.db_exec_tags import tag_for_db_exec
 from ..constructs.fargate_service import PrivateEgressFargateService
 from ..constructs.input_hash import expand_globs, hash_inputs
 from ..constructs.public_http_alb import PublicHttpAlb
+from ..constructs.shared_efs_volume import EfsAccessPointSpec, SharedEfsVolume
 from ..models.asset_loader import AssetLoader
 from ..models.data_exports import DataExports
 from ..models.foundation_exports import FoundationExports
@@ -98,50 +99,27 @@ class MatrixStack(Stack):
         # EFS for /data (signing key, media store, log config,
         # registration shared secret, generated homeserver.yaml).
 
-        # AGENT TODO: Encapsulate this SG, FS, and AP as a construct that handls
-        # all that for us.
-        # The following kwargs should use these default values:
-        # - allow_all_outbound=True
-        # - vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
-        # - encrypted=True,
-        # - removal_policy=RemovalPolicy.RETAIN,
-        # - performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
-        # - throughput_mode=efs.ThroughputMode.BURSTING,
-        # The following kwargs need to be explicitly provided:
-        # - vpc
-        # - access_points
-        # All other kwargs should be taken as a ** group and passed to efs.FileSystem
-        # access_points should be a list of dataclass objects that we define
-        # with the following properties:
-        # - id, client_token, create_acl, path, posix_user (all optional except id)
-        # The construct should assign the following member properties:
-        # - security_group
-        # - filesystem
-        efs_sg = ec2.SecurityGroup(
-            self, "EfsSecurityGroup", vpc=foundation.vpc, allow_all_outbound=True
-        )
-        filesystem = efs.FileSystem(
+        efs_volume = SharedEfsVolume(
             self,
             "MatrixFs",
             vpc=foundation.vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-            ),
-            security_group=efs_sg,
-            encrypted=True,
-            removal_policy=RemovalPolicy.RETAIN,
+            access_points=[
+                EfsAccessPointSpec(
+                    id="DataAccessPoint",
+                    path="/synapse",
+                    create_acl=efs.Acl(
+                        owner_uid=SYNAPSE_UID,
+                        owner_gid=SYNAPSE_GID,
+                        permissions="750",
+                    ),
+                    posix_user=efs.PosixUser(uid=SYNAPSE_UID, gid=SYNAPSE_GID),
+                ),
+            ],
             lifecycle_policy=efs.LifecyclePolicy.AFTER_14_DAYS,
-            performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
-            throughput_mode=efs.ThroughputMode.BURSTING,
         )
-        access_point = filesystem.add_access_point(
-            "DataAccessPoint",
-            path="/synapse",
-            create_acl=efs.Acl(
-                owner_uid=SYNAPSE_UID, owner_gid=SYNAPSE_GID, permissions="750"
-            ),
-            posix_user=efs.PosixUser(uid=SYNAPSE_UID, gid=SYNAPSE_GID),
-        )
+        efs_sg = efs_volume.security_group
+        filesystem = efs_volume.filesystem
+        access_point = efs_volume.access_points["DataAccessPoint"]
 
         ###
         # Service: one Fargate task with init + main containers
