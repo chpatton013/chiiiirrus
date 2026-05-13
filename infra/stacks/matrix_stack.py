@@ -122,6 +122,34 @@ class MatrixStack(Stack):
         efs_sg = efs_volume.security_group
         filesystem = efs_volume.filesystem
         access_point = efs_volume.access_points["DataAccessPoint"]
+        # Pin the underlying L1 logical ids to those of the
+        # pre-`SharedEfsVolume`-extraction layout. The construct
+        # extraction moved EFS resources under `MatrixFs/...`, which
+        # would force CFN to replace them -- losing the signing key,
+        # media store, and registration secret.
+        cast(ec2.CfnSecurityGroup, efs_sg.node.default_child).override_logical_id(
+            "EfsSecurityGroupEC5F36AC"
+        )
+        cast(efs.CfnFileSystem, filesystem.node.default_child).override_logical_id(
+            "MatrixFs672E241B"
+        )
+        cast(efs.CfnAccessPoint, access_point.node.default_child).override_logical_id(
+            "MatrixFsDataAccessPointC8F40A6D"
+        )
+        # Pin the auto-created mount targets too. EFS only permits
+        # one mount target per AZ per file system, so unpinned new
+        # MT ids collide with the still-live old MTs during the
+        # update. Order matches subnet enumeration (subnet1 -> AZ1).
+        mount_targets = sorted(
+            (c for c in filesystem.node.children if isinstance(c, efs.CfnMountTarget)),
+            key=lambda c: c.node.id,
+        )
+        mount_targets[0].override_logical_id(
+            "MatrixFsEfsMountTargetprivateegressSubnet182E204A5"
+        )
+        mount_targets[1].override_logical_id(
+            "MatrixFsEfsMountTargetprivateegressSubnet27BEA373E"
+        )
 
         ###
         # Service: one Fargate task with init + main containers
@@ -257,6 +285,16 @@ class MatrixStack(Stack):
             ec2.Port.tcp(2049),
             "Synapse task to EFS",
         )
+        # Pin the ingress rule's logical id to its pre-extraction
+        # name; the EFS SG path moved under MatrixFs/SecurityGroup.
+        cast(
+            ec2.CfnSecurityGroupIngress,
+            efs_sg.node.find_child(
+                f"from {Stack.of(self).stack_name}ServiceSecurityGroup2F78174D:2049"
+            ),
+        ).override_logical_id(
+            "EfsSecurityGroupfromMatrixStackServiceSecurityGroup2F78174D2049611D9B6B"
+        )
 
         ###
         # ALB at matrix.<public_domain>. Terminates TLS, forwards
@@ -309,10 +347,25 @@ class MatrixStack(Stack):
             backup_plan_name="matrix-efs-backups",
             backup_vault=foundation.backup_vault,
         )
-        backup_plan.backup_plan.add_selection(
+        # Pin to the pre-`StandardBackupPlan`-extraction logical id;
+        # AWS rejects a second plan with the same plan document if a
+        # new logical id triggers CREATE-before-DELETE on the rename.
+        cast(
+            backup.CfnBackupPlan, backup_plan.backup_plan.node.default_child
+        ).override_logical_id("MatrixBackupPlan3C4DADBC")
+        efs_selection = backup_plan.backup_plan.add_selection(
             "EfsSelection",
             resources=[backup.BackupResource.from_efs_file_system(filesystem)],
         )
+        # Pin the selection + its auto-created IAM role to their
+        # pre-extraction logical ids. The construct path moved from
+        # MatrixBackupPlan/EfsSelection to MatrixBackupPlan/Plan/EfsSelection.
+        cast(
+            backup.CfnBackupSelection, efs_selection.node.default_child
+        ).override_logical_id("MatrixBackupPlanEfsSelection4D5BDD7B")
+        cast(
+            iam.CfnRole, efs_selection.node.find_child("Role").node.default_child
+        ).override_logical_id("MatrixBackupPlanEfsSelectionRoleCB94F553")
 
         ###
         # Bot account bootstrap (Custom Resource -> ECS one-shot task)
