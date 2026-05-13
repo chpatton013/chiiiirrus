@@ -22,6 +22,7 @@ from typing import cast
 from aws_cdk import (
     Duration,
     RemovalPolicy,
+    Size,
     Stack,
     aws_certificatemanager as acm,
     aws_cloudfront as cloudfront,
@@ -72,26 +73,30 @@ def _fetch_bundle(version: str, cache_dir: pathlib.Path) -> pathlib.Path:
     tarball = cache_dir / f"element-{version}.tar.gz"
     extract_dir = cache_dir / f"dist-{version}"
 
-    if extract_dir.is_dir() and (extract_dir / "index.html").is_file():
-        return extract_dir
+    if not (extract_dir.is_dir() and (extract_dir / "index.html").is_file()):
+        if not tarball.is_file():
+            url = f"{_ELEMENT_DOWNLOAD_BASE}/{version}/element-{version}.tar.gz"
+            urllib.request.urlretrieve(url, tarball)
 
-    if not tarball.is_file():
-        url = f"{_ELEMENT_DOWNLOAD_BASE}/{version}/element-{version}.tar.gz"
-        urllib.request.urlretrieve(url, tarball)
-
-    if extract_dir.is_dir():
-        shutil.rmtree(extract_dir)
-    extract_dir.mkdir()
-    with tarfile.open(tarball, "r:gz") as t:
-        t.extractall(extract_dir)
-    # Element's tarball extracts to a single `element-vX.Y.Z/`
-    # subdir. Flatten so `extract_dir/index.html` lands directly.
-    children = list(extract_dir.iterdir())
-    if len(children) == 1 and children[0].is_dir():
-        inner = children[0]
-        for child in inner.iterdir():
-            child.rename(extract_dir / child.name)
-        inner.rmdir()
+        if extract_dir.is_dir():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir()
+        with tarfile.open(tarball, "r:gz") as t:
+            t.extractall(extract_dir)
+        # Element's tarball extracts to a single `element-vX.Y.Z/`
+        # subdir. Flatten so `extract_dir/index.html` lands directly.
+        children = list(extract_dir.iterdir())
+        if len(children) == 1 and children[0].is_dir():
+            inner = children[0]
+            for child in inner.iterdir():
+                child.rename(extract_dir / child.name)
+            inner.rmdir()
+    # Strip source maps every time -- they don't regenerate, but
+    # an older cache may predate this scrub. Element ships ~70 MB
+    # of .map files; serving them to users gives away the source
+    # tree and blows out the BucketDeployment Lambda's tmpfs.
+    for m in extract_dir.rglob("*.map"):
+        m.unlink()
     return extract_dir
 
 
@@ -185,6 +190,11 @@ class ElementWebStack(Stack):
             destination_bucket=bucket,
             distribution=distribution,
             distribution_paths=["/*"],
+            # Element ships ~70 MB across ~1000 files. The default
+            # 128 MB / 512 MB tmpfs / 15-min Lambda config can't
+            # finish the upload before timing out.
+            memory_limit=1024,
+            ephemeral_storage_size=Size.mebibytes(1024),
         )
 
         target = route53.RecordTarget.from_alias(
