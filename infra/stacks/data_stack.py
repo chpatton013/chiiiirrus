@@ -68,6 +68,11 @@ class DataStack(Stack):
                 multi_az=False,
                 storage_encrypted=True,
                 publicly_accessible=False,
+                # RDS automated snapshots are always-on. The CDK
+                # default is a 1-day retention; bump to 14 to match
+                # the EFS lifecycle policy + give us headroom on
+                # ransomware / oops-deletes.
+                backup_retention=Duration.days(14),
             ),
         )
 

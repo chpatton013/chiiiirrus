@@ -4,10 +4,12 @@ from aws_cdk import (
     Duration,
     RemovalPolicy,
     Stack,
+    aws_backup as backup,
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_efs as efs,
     aws_elasticloadbalancingv2 as elbv2,
+    aws_events as events,
     aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
@@ -223,3 +225,35 @@ class VaultwardenStack(Stack):
             description="Vaultwarden to DB",
         )
         tag_for_db_exec(service.service, label="vaultwarden")
+
+        ###
+        # Backups. Vault attachments + sqlite-on-EFS (when sqlite is
+        # the backend; postgres covered by the shared RDS backup
+        # retention from DataStack). Same cadence as Matrix's plan.
+
+        backup_plan = backup.BackupPlan(
+            self,
+            "VaultwardenBackupPlan",
+            backup_plan_name="vaultwarden-efs-backups",
+            backup_vault=foundation.backup_vault,
+        )
+        backup_plan.add_rule(
+            backup.BackupPlanRule(
+                rule_name="daily-10-days",
+                schedule_expression=events.Schedule.cron(minute="0", hour="5"),
+                delete_after=Duration.days(10),
+            )
+        )
+        backup_plan.add_rule(
+            backup.BackupPlanRule(
+                rule_name="weekly-4-weeks",
+                schedule_expression=events.Schedule.cron(
+                    minute="0", hour="6", week_day="SUN"
+                ),
+                delete_after=Duration.days(28),
+            )
+        )
+        backup_plan.add_selection(
+            "EfsSelection",
+            resources=[backup.BackupResource.from_efs_file_system(filesystem)],
+        )
