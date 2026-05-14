@@ -92,13 +92,34 @@ oidc_providers:
         display_name_template: "{{ user.name }}"
         email_template: "{{ user.email }}"
 
-# Allow the self-hosted Element-Web at chat.<server> to be a
-# valid post-SSO redirect target. Synapse defaults to refusing
+# Allow the self-hosted Element-Web and Element-Call clients to
+# be valid post-SSO redirect targets. Synapse defaults to refusing
 # any redirect URL not on this list. Pattern is prefix-match,
 # not regex.
 sso:
   client_whitelist:
     - "${ELEMENT_WEB_BASE_URL}"
+    - "${ELEMENT_CALL_BASE_URL}"
+
+# coturn integration. Synapse signs short-lived (username,
+# password) pairs using the shared secret and hands them to
+# clients via /voip/turnServer; coturn validates with the same
+# secret. The URIs list is rendered by matrix_stack.py from the
+# TurnExports and pasted in verbatim.
+turn_uris:
+${TURN_URIS_YAML}
+turn_shared_secret: "${TURN_SHARED_SECRET}"
+turn_user_lifetime: ${TURN_USER_LIFETIME_SECONDS}000
+turn_allow_guests: false
+
+# MSCs required for the modern Element-Call (group voice/video
+# via LiveKit SFU). MSC3266 powers the room-summary API the call
+# UI uses; MSC3401 carries group-call signaling in room state;
+# MSC4140 is delayed events for call invites.
+experimental_features:
+  msc3266_enabled: true
+  msc3401_enabled: true
+  msc4140_enabled: true
 EOF
 
 # 5. Minimal log config so Synapse logs to stdout (CloudWatch picks

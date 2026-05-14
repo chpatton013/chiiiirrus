@@ -15,12 +15,15 @@ from .stacks.apex_edge_stack import (
 )
 from .stacks.authentik_stack import AuthentikImports, AuthentikStack
 from .stacks.data_stack import DataImports, DataStack
+from .stacks.element_call_stack import ElementCallImports, ElementCallStack
 from .stacks.element_web_stack import ElementWebImports, ElementWebStack
 from .stacks.foundation_stack import FoundationImports, FoundationStack
 from .stacks.headscale_stack import HeadscaleImports, HeadscaleStack
+from .stacks.lk_jwt_stack import LkJwtImports, LkJwtStack
 from .stacks.mail_stack import MailImports, MailStack
 from .stacks.matrix_stack import MatrixImports, MatrixStack
 from .stacks.openclaw_stack import OpenClawImports, OpenClawStack
+from .stacks.turn_stack import TurnImports, TurnStack
 from .stacks.vaultwarden_stack import VaultwardenImports, VaultwardenStack
 from .stacks.webfinger_stack import WebFingerImports, WebFingerStack
 from .stacks.webmail_stack import WebmailImports, WebmailStack
@@ -52,6 +55,9 @@ def build_app(
     matrix_redirect_uri = f"https://{matrix_fqdn}/_synapse/client/oidc/callback"
     element_web_fqdn = f"{cfg.element_web.subdomain}.{cfg.foundation.public_domain}"
     element_web_base_url = f"https://{element_web_fqdn}/"
+    lk_jwt_fqdn = f"{cfg.lk_jwt.subdomain}.{cfg.foundation.public_domain}"
+    element_call_fqdn = f"{cfg.element_call.subdomain}.{cfg.foundation.public_domain}"
+    element_call_base_url = f"https://{element_call_fqdn}/"
 
     # CloudFront / ACM-for-CloudFront only live in us-east-1, so
     # ApexEdgeStack is pinned there. Everything else stays in the
@@ -161,6 +167,26 @@ def build_app(
         ),
         env=env,
     )
+    turn = TurnStack(
+        app,
+        "TurnStack",
+        imports=TurnImports(
+            cfg=cfg.turn,
+            foundation=foundation,
+            assets=assets,
+        ),
+        env=env,
+    ).exports
+    LkJwtStack(
+        app,
+        "LkJwtStack",
+        imports=LkJwtImports(
+            cfg=cfg.lk_jwt,
+            foundation=foundation,
+            turn=turn,
+        ),
+        env=env,
+    )
     MatrixStack(
         app,
         "MatrixStack",
@@ -171,6 +197,10 @@ def build_app(
             assets=assets,
             authentik_issuer_base=authentik_issuer_base,
             element_web_base_url=element_web_base_url,
+            element_call_base_url=element_call_base_url,
+            turn_shared_secret=turn.turn_shared_secret,
+            turn_uris=turn.turn_uris,
+            turn_user_lifetime_seconds=cfg.turn.turn_user_lifetime_seconds,
         ),
         env=env,
     )
@@ -215,7 +245,17 @@ def build_app(
                         ),
                         s3deploy.Source.json_data(
                             ".well-known/matrix/client",
-                            {"m.homeserver": {"base_url": f"https://{matrix_fqdn}"}},
+                            {
+                                "m.homeserver": {
+                                    "base_url": f"https://{matrix_fqdn}",
+                                },
+                                # Element-Web reads this and uses
+                                # our Element-Call deploy instead
+                                # of the default call.element.io.
+                                "io.element.call": {
+                                    "preferred_domain": element_call_base_url,
+                                },
+                            },
                         ),
                     ],
                     content_type="application/json",
@@ -235,6 +275,19 @@ def build_app(
             foundation=foundation,
             assets=assets,
             matrix_fqdn=matrix_fqdn,
+        ),
+        env=apex_edge_env,
+        cross_region_references=True,
+    )
+    ElementCallStack(
+        app,
+        "ElementCallStack",
+        imports=ElementCallImports(
+            cfg=cfg.element_call,
+            foundation=foundation,
+            assets=assets,
+            matrix_fqdn=matrix_fqdn,
+            lk_jwt_fqdn=lk_jwt_fqdn,
         ),
         env=apex_edge_env,
         cross_region_references=True,

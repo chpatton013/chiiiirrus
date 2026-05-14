@@ -161,3 +161,42 @@ template = "template0"
 # every synth; pin to e.g. "v1.11.105" if a release regresses.
 subdomain = "chat"
 version = "latest"
+
+[turn]
+# coturn (TURN server) + livekit-server (Element-Call SFU)
+# co-located on a single EC2 instance with one Elastic IP.
+# Both subdomains resolve to that EIP; one multi-SAN TLS cert
+# from Let's Encrypt covers both via certbot DNS-01.
+turn_subdomain = "turn"
+livekit_subdomain = "livekit"
+instance_type = "t3.micro"
+# 100 UDP ports for TURN relay sessions -- one per concurrent
+# call leg. Enough for a household; full 49152-65535 hits the
+# AWS security-group rule limit.
+relay_min_port = 49152
+relay_max_port = 49251
+# 24h is the practical max coturn accepts. Synapse hands out
+# fresh creds on each /voip/turnServer call but Element-Web
+# doesn't re-fetch mid-call, so long lifetimes matter.
+turn_user_lifetime_seconds = 86400
+
+[lk_jwt]
+# element-hq/lk-jwt-service: mints short-lived LiveKit JWTs for
+# Element-Call clients after verifying their Matrix OpenID
+# token. Stateless HTTP behind PublicHttpAlb.
+subdomain = "lk-jwt"
+image_version = "latest"
+
+[lk_jwt.task]
+cpu = 256
+memory_limit_mib = 512
+desired_count = 1
+min_healthy_percent = 0
+
+[element_call]
+# Self-hosted Element-Call (React SPA) at call.<public_domain>.
+# `version = "latest"` resolves to the newest GitHub release at
+# every synth; pin to e.g. "livekit-v0.13.0" if a release
+# regresses.
+subdomain = "call"
+version = "latest"

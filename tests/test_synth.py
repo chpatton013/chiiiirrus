@@ -82,6 +82,15 @@ class TestSynth(unittest.TestCase):
     def test_element_web_stack(self) -> None:
         self.assertIn("Resources", self._template("ElementWebStack"))
 
+    def test_turn_stack(self) -> None:
+        self.assertIn("Resources", self._template("TurnStack"))
+
+    def test_lk_jwt_stack(self) -> None:
+        self.assertIn("Resources", self._template("LkJwtStack"))
+
+    def test_element_call_stack(self) -> None:
+        self.assertIn("Resources", self._template("ElementCallStack"))
+
 
 if __name__ == "__main__":
     unittest.main()

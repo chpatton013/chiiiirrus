@@ -1,0 +1,30 @@
+# LiveKit server config rendered on-host by turn user-data.
+# Placeholders of the form __KEY__ are substituted at boot
+# (after Python's @@KEY@@ pass on the wrapping shell script).
+
+port: 7880
+
+bind_addresses:
+  - "0.0.0.0"
+
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: true
+
+keys:
+  # `key: secret` pairs used to sign + verify the JWTs that
+  # lk-jwt-service mints for Element-Call clients.
+  "__LIVEKIT_API_KEY__": "__LIVEKIT_API_SECRET__"
+
+# Native TLS on 7880. Clients connect via
+# `wss://livekit.<public_domain>:7880`. Same cert pair the
+# coturn config uses -- one multi-SAN cert from certbot covers
+# both turn.<domain> and livekit.<domain>.
+tls:
+  cert_file: "__TLS_CERT_PATH__"
+  key_file: "__TLS_KEY_PATH__"
+
+logging:
+  level: info
+  json: false

@@ -60,6 +60,16 @@ class MatrixImports:
     # post-SSO redirect target (Synapse refuses redirects to
     # anything not on the list by default).
     element_web_base_url: str
+    # Element-Call client base URL -- also a valid post-SSO
+    # redirect target.
+    element_call_base_url: str
+    # TURN/coturn integration. Synapse hands clients ephemeral
+    # HMAC-signed credentials computed from `turn_shared_secret`;
+    # `turn_uris` is the list of `turn:` / `turns:` URIs the
+    # client should try in order.
+    turn_shared_secret: secretsmanager.ISecret
+    turn_uris: list[str]
+    turn_user_lifetime_seconds: int
 
 
 class MatrixStack(Stack):
@@ -155,6 +165,11 @@ class MatrixStack(Stack):
         # Service: one Fargate task with init + main containers
         # sharing /data via EFS.
 
+        # Pre-render the homeserver.yaml `turn_uris:` block so the
+        # init container just inlines the env var as-is. Keeps the
+        # init.sh template free of list-rendering logic.
+        turn_uris_yaml = "\n".join(f'  - "{uri}"' for uri in imports.turn_uris)
+
         common_environment = {
             "SYNAPSE_SERVER_NAME": server_name,
             "PUBLIC_BASEURL": f"https://{listener_fqdn}/",
@@ -165,6 +180,9 @@ class MatrixStack(Stack):
             "OIDC_ISSUER": oidc_issuer,
             "REMOTE_MEDIA_LIFETIME": cfg.remote_media_lifetime,
             "ELEMENT_WEB_BASE_URL": imports.element_web_base_url,
+            "ELEMENT_CALL_BASE_URL": imports.element_call_base_url,
+            "TURN_URIS_YAML": turn_uris_yaml,
+            "TURN_USER_LIFETIME_SECONDS": str(imports.turn_user_lifetime_seconds),
         }
         # Init container env additions only it needs: DB_USER plain,
         # DB_PASSWORD and OIDC_CLIENT_ID/SECRET as ECS secrets.
@@ -177,6 +195,9 @@ class MatrixStack(Stack):
             "OIDC_CLIENT_ID": ecs.Secret.from_secrets_manager(oidc_secret, "client_id"),
             "OIDC_CLIENT_SECRET": ecs.Secret.from_secrets_manager(
                 oidc_secret, "client_secret"
+            ),
+            "TURN_SHARED_SECRET": ecs.Secret.from_secrets_manager(
+                imports.turn_shared_secret, "secret"
             ),
         }
 

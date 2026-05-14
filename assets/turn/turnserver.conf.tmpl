@@ -1,0 +1,47 @@
+# coturn config rendered on-host by turn user-data. Placeholders
+# of the form __KEY__ are substituted at boot (after Python's
+# @@KEY@@ pass on the wrapping shell script, so the two
+# substitution layers don't collide). Edits here take effect
+# after the next `systemctl restart coturn`.
+
+listening-port=3478
+tls-listening-port=5349
+
+# The instance's elastic public IP. Clients connect to
+# turn.<domain> which resolves here, but coturn needs the literal
+# address for its STUN responses (it can't introspect the EIP
+# through the NAT-less single-tier VPC routing).
+external-ip=__EXTERNAL_IP__
+
+# UDP range for relay sessions; one port per concurrent call leg.
+min-port=__RELAY_MIN_PORT__
+max-port=__RELAY_MAX_PORT__
+
+# Long-term-credential HMAC mode. Synapse signs short-lived
+# (username, password) tuples using the same shared secret coturn
+# loads here; no per-user provisioning on either side.
+fingerprint
+lt-cred-mech
+use-auth-secret
+static-auth-secret=__TURN_SHARED_SECRET__
+
+realm=__PUBLIC_DOMAIN__
+server-name=__TURN_FQDN__
+
+# Operational hygiene: drop multicast (we never relay it),
+# disable the cleartext CLI (the only management surface is SSM),
+# don't relay onto loopback or private ranges (defense in depth).
+no-multicast-peers
+no-cli
+no-loopback-peers
+no-tlsv1
+no-tlsv1_1
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+
+syslog
+
+cert=__TLS_CERT_PATH__
+pkey=__TLS_KEY_PATH__

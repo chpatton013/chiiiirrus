@@ -235,6 +235,8 @@ has a leading candidate but is genuinely a trade-off.
 matches the OpenClaw pattern. Cheaper than NLB. The "patching"
 con is real but cloud-init + unattended-upgrades handles it.
 
+**Operator decision: Agreed**
+
 ### D2. TURN cert provisioning
 
 `turns:` (TLS-TURN on 5349) needs a real cert. coturn reads cert
@@ -249,6 +251,8 @@ files from disk and re-reads on SIGHUP.
 **Leading candidate: certbot on the host with DNS-01 against
 Route53** (works without exposing port 80, and Route53 access is
 just an instance role). Renewal cron does the SIGHUP into coturn.
+
+**Operator decision: Agreed**
 
 ### D3. LiveKit host: EC2 (co-located with coturn) vs Fargate
 
@@ -266,6 +270,10 @@ trivial. Both are small `t3.micro`/`t3.small` boxes.
 If running both on one instance is the chosen path, decide before
 Phase 1 so the SG and EIP can be sized for both.
 
+**Operator decision: Co-locate on the TURN EC2 instance.** We'll start with less
+infrastructure, and consider a separate EC2 instance if we ever want to
+partition our resource utilization.
+
 ### D4. Phase 1 only, or wait for Phase 2?
 
 | Option | Pros | Cons |
@@ -278,6 +286,8 @@ Phase 1 so the SG and EIP can be sized for both.
 real "I need to do a group call" moment. Bookmark Phase 2 as a
 follow-up in this doc rather than a separate plan file.
 
+**Operator decision: Phase 1 + 2 bundled**
+
 ### D5. Synapse `turn_user_lifetime`
 
 Synapse docs default `1h`. Element-Web doesn't re-fetch
@@ -289,6 +299,8 @@ issues.
 ephemerality is a defense against a credential leak we don't
 realistically face.
 
+**Operator decision: Agreed**
+
 ### D6. Restrict TURN to authenticated Matrix users only?
 
 coturn supports allowlisting peer IPs (`allowed-peer-ip`) but
@@ -299,6 +311,8 @@ itself rotating would invalidate all live creds.
 
 **Leading candidate: no extra restriction.** The HMAC scheme is
 the standard. Address abuse if it ever materializes.
+
+**Operator decision: Agreed**
 
 ## Sequencing
 

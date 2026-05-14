@@ -39,6 +39,15 @@ class AssetLoader:
     def element_web_cache_path(self) -> pathlib.Path:
         return self._assets / "element-web" / "cache"
 
+    def element_call_cache_path(self) -> pathlib.Path:
+        return self._assets / "element-call" / "cache"
+
+    def turn_assets_path(self) -> pathlib.Path:
+        path = self._assets / "turn"
+        if not path.is_dir():
+            raise FileNotFoundError(f"turn assets not found: {path}")
+        return path
+
     @functools.cache
     def read_text(self, *parts: str) -> str:
         return (self._assets.joinpath(*parts)).read_text()
