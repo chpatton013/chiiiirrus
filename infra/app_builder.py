@@ -58,6 +58,9 @@ def build_app(
     lk_jwt_fqdn = f"{cfg.lk_jwt.subdomain}.{cfg.foundation.public_domain}"
     element_call_fqdn = f"{cfg.element_call.subdomain}.{cfg.foundation.public_domain}"
     element_call_base_url = f"https://{element_call_fqdn}/"
+    # Element-Web embeds the Element-Call widget by URL; no
+    # trailing slash inside the widget code's URL composition.
+    element_call_url = element_call_base_url.rstrip("/")
 
     # CloudFront / ACM-for-CloudFront only live in us-east-1, so
     # ApexEdgeStack is pinned there. Everything else stays in the
@@ -275,6 +278,7 @@ def build_app(
             foundation=foundation,
             assets=assets,
             matrix_fqdn=matrix_fqdn,
+            element_call_url=element_call_url,
         ),
         env=apex_edge_env,
         cross_region_references=True,

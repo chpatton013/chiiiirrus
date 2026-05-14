@@ -109,6 +109,10 @@ class ElementWebImports:
     # app_builder so this stack stays unaware of how matrix_fqdn
     # is composed.
     matrix_fqdn: str
+    # Origin of the self-hosted Element-Call SPA (no trailing
+    # slash). Element-Web embeds this URL as the call widget when
+    # `element_call.use_exclusively` is set.
+    element_call_url: str
 
 
 class ElementWebStack(Stack):
@@ -135,6 +139,7 @@ class ElementWebStack(Stack):
         substitutions = {
             "MATRIX_FQDN": imports.matrix_fqdn,
             "SERVER_NAME": foundation.public_domain,
+            "ELEMENT_CALL_URL": imports.element_call_url,
         }
         config = config_template
         for key, value in substitutions.items():
