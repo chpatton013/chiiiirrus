@@ -128,15 +128,17 @@ class ElementWebStack(Stack):
 
         # Fetch + materialize the Element bundle at synth time.
         version = _resolve_version(cfg.version)
-        repo_root = pathlib.Path(__file__).resolve().parents[2]
-        cache_dir = repo_root / "assets" / "element-web" / "cache"
-        bundle_dir = _fetch_bundle(version, cache_dir)
+        bundle_dir = _fetch_bundle(version, imports.assets.element_web_cache_path())
 
         # Render config.json on top of the upstream bundle.
         config_template = imports.assets.read_text("element-web", "config.json.tmpl")
-        config = config_template.replace(
-            "@@MATRIX_FQDN@@", imports.matrix_fqdn
-        ).replace("@@SERVER_NAME@@", foundation.public_domain)
+        substitutions = {
+            "MATRIX_FQDN": imports.matrix_fqdn,
+            "SERVER_NAME": foundation.public_domain,
+        }
+        config = config_template
+        for key, value in substitutions.items():
+            config = config.replace(f"@@{key}@@", value)
         (bundle_dir / "config.json").write_text(config)
 
         bucket = s3.Bucket(

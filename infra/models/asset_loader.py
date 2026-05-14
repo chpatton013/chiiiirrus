@@ -36,6 +36,9 @@ class AssetLoader:
             raise FileNotFoundError(f"openclaw_bot asset not found: {path}")
         return path
 
+    def element_web_cache_path(self) -> pathlib.Path:
+        return self._assets / "element-web" / "cache"
+
     @functools.cache
     def read_text(self, *parts: str) -> str:
         return (self._assets.joinpath(*parts)).read_text()
