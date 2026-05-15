@@ -14,7 +14,7 @@
 # daily; deploy-hook re-permissions the cert + reloads both
 # services.
 #
-# Template: turn_stack.py substitutes `@@KEY@@` placeholders for
+# Template: turn_stack.py substitutes `@@`-delimited placeholders for
 # CDK-side values BEFORE this script lands on the host.
 # turnserver.conf.tmpl + livekit.yaml.tmpl use `__KEY__` for the
 # host-side render() step so the two layers don't collide.
@@ -56,8 +56,8 @@ get_secret_field() {
   local secret_id="$1"
   local field="$2"
   aws --region '@@AWS_REGION@@' secretsmanager get-secret-value \
-    --secret-id "${secret_id}" --query SecretString --output text \
-    | jq -r ".\"${field}\""
+    --secret-id "${secret_id}" --query SecretString --output text |
+    jq -r ".\"${field}\""
 }
 TURN_SHARED_SECRET="$(get_secret_field '@@TURN_SHARED_SECRET_NAME@@' secret)"
 LIVEKIT_API_KEY="$(get_secret_field '@@LIVEKIT_API_KEY_SECRET_NAME@@' secret)"

@@ -135,15 +135,15 @@ class ElementWebStack(Stack):
         bundle_dir = _fetch_bundle(version, imports.assets.element_web_cache_path())
 
         # Render config.json on top of the upstream bundle.
-        config_template = imports.assets.read_text("element-web", "config.json.tmpl")
-        substitutions = {
-            "MATRIX_FQDN": imports.matrix_fqdn,
-            "SERVER_NAME": foundation.public_domain,
-            "ELEMENT_CALL_URL": imports.element_call_url,
-        }
-        config = config_template
-        for key, value in substitutions.items():
-            config = config.replace(f"@@{key}@@", value)
+        config = imports.assets.render_template(
+            "element-web",
+            "config.json.tmpl",
+            substitutions={
+                "MATRIX_FQDN": imports.matrix_fqdn,
+                "SERVER_NAME": foundation.public_domain,
+                "ELEMENT_CALL_URL": imports.element_call_url,
+            },
+        )
         (bundle_dir / "config.json").write_text(config)
 
         bucket = s3.Bucket(

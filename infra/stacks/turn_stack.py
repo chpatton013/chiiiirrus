@@ -216,23 +216,23 @@ class TurnStack(Stack):
         # livekit.yaml.tmpl use __KEY__ for the host-side render
         # step (different markers so the two layers don't
         # collide).
-        user_data_template = imports.assets.read_text("turn", "user-data.sh.tmpl")
-        substitutions = {
-            "AWS_REGION": Aws.REGION,
-            "ASSET_S3_URI": f"s3://{asset.s3_bucket_name}/{asset.s3_object_key}",
-            "LIVEKIT_VERSION": LIVEKIT_VERSION,
-            "TURN_SHARED_SECRET_NAME": TURN_SHARED_SECRET_NAME,
-            "LIVEKIT_API_KEY_SECRET_NAME": LIVEKIT_API_KEY_SECRET_NAME,
-            "LIVEKIT_API_SECRET_SECRET_NAME": LIVEKIT_API_SECRET_SECRET_NAME,
-            "PUBLIC_DOMAIN": foundation.public_domain,
-            "TURN_FQDN": turn_fqdn,
-            "LIVEKIT_FQDN": livekit_fqdn,
-            "RELAY_MIN_PORT": str(cfg.relay_min_port),
-            "RELAY_MAX_PORT": str(cfg.relay_max_port),
-        }
-        rendered = user_data_template
-        for key, value in substitutions.items():
-            rendered = rendered.replace(f"@@{key}@@", value)
+        rendered = imports.assets.render_template(
+            "turn",
+            "user-data.sh.tmpl",
+            substitutions={
+                "AWS_REGION": Aws.REGION,
+                "ASSET_S3_URI": f"s3://{asset.s3_bucket_name}/{asset.s3_object_key}",
+                "LIVEKIT_VERSION": LIVEKIT_VERSION,
+                "TURN_SHARED_SECRET_NAME": TURN_SHARED_SECRET_NAME,
+                "LIVEKIT_API_KEY_SECRET_NAME": LIVEKIT_API_KEY_SECRET_NAME,
+                "LIVEKIT_API_SECRET_SECRET_NAME": LIVEKIT_API_SECRET_SECRET_NAME,
+                "PUBLIC_DOMAIN": foundation.public_domain,
+                "TURN_FQDN": turn_fqdn,
+                "LIVEKIT_FQDN": livekit_fqdn,
+                "RELAY_MIN_PORT": str(cfg.relay_min_port),
+                "RELAY_MAX_PORT": str(cfg.relay_max_port),
+            },
+        )
         user_data = ec2.UserData.custom(rendered)
 
         ubuntu_ami = ec2.MachineImage.from_ssm_parameter(

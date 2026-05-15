@@ -1,5 +1,13 @@
 import functools
 import pathlib
+import re
+
+# Stack templates place each substitutable value between
+# `@@KEY@@` markers. The keys are uppercase ASCII + underscores;
+# `render_template` rejects any other shape so an embedded "@@" in
+# a config (e.g. `auth@@example.com`) doesn't get treated as a
+# half-finished placeholder.
+_PLACEHOLDER_PATTERN = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 
 
 class AssetLoader:
@@ -51,3 +59,32 @@ class AssetLoader:
     @functools.cache
     def read_text(self, *parts: str) -> str:
         return (self._assets.joinpath(*parts)).read_text()
+
+    def render_template(self, *parts: str, substitutions: dict[str, str]) -> str:
+        """Read a template asset and substitute its `@@KEY@@` markers.
+
+        Strict on both sides: raises if `substitutions` contains keys
+        the template doesn't reference, or if the template references
+        keys `substitutions` doesn't provide. Either is a sign of
+        drift between the template and its caller.
+        """
+        text = self.read_text(*parts)
+        path = self._assets.joinpath(*parts)
+        present = set(_PLACEHOLDER_PATTERN.findall(text))
+        provided = set(substitutions)
+        missing = present - provided
+        unused = provided - present
+        problems = []
+        if missing:
+            problems.append(
+                f"template references {sorted(missing)} but no value was provided"
+            )
+        if unused:
+            problems.append(
+                f"substitutions {sorted(unused)} do not appear in the template"
+            )
+        if problems:
+            raise ValueError(f"render_template({path}): " + "; ".join(problems))
+        for key, value in substitutions.items():
+            text = text.replace(f"@@{key}@@", value)
+        return text

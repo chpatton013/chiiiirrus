@@ -2,6 +2,11 @@
 include_files = ["bin/*"]
 
 [validator.biome]
+# biome dispatches by extension; `.json.tmpl` etc. are silently
+# skipped. Content-level validators (trailing-ws, unicode, tabs)
+# still apply to .tmpl files via the `**` globs further down;
+# losing biome on templates means no auto-formatting, not no
+# validation.
 include_files = [
   "**/*.css",
   "**/*.htm",
@@ -19,7 +24,7 @@ exclude_files = ["bin/*"]
 include_files = ["**"]
 
 [validator.ini]
-include_files = ["**/*.cfg", "**/*.ini"]
+include_files = ["**/*.cfg", "**/*.cfg.tmpl", "**/*.ini", "**/*.ini.tmpl"]
 
 [validator.python-black]
 include_files = ["**/*.py"]
@@ -42,7 +47,9 @@ include_files = ["**/*.rs"]
 [validator.shellcheck]
 include_files = [
   "**/*.bash",
+  "**/*.bash.tmpl",
   "**/*.sh",
+  "**/*.sh.tmpl",
   "assets/openclaw_bot/scripts/prestart",
   "bin/aws",
   "bin/aws-create-hosted-zone",
@@ -60,7 +67,9 @@ include_files = [
 [validator.shfmt]
 include_files = [
   "**/*.bash",
+  "**/*.bash.tmpl",
   "**/*.sh",
+  "**/*.sh.tmpl",
   "assets/openclaw_bot/scripts/prestart",
   "bin/aws",
   "bin/aws-create-hosted-zone",
@@ -76,20 +85,20 @@ include_files = [
 ]
 
 [validator.taplo]
-include_files = ["**/*.toml"]
+include_files = ["**/*.toml", "**/*.toml.tmpl"]
 
 [validator.terraform-fmt]
-include_files = ["**/*.tf", "**/*.tfvars"]
+include_files = ["**/*.tf", "**/*.tf.tmpl", "**/*.tfvars", "**/*.tfvars.tmpl"]
 
 [validator.xml]
-include_files = ["**/*.xml"]
+include_files = ["**/*.xml", "**/*.xml.tmpl"]
 
 [validator.yamlfmt]
-include_files = ["**/*.yaml", "**/*.yml"]
+include_files = ["**/*.yaml", "**/*.yaml.tmpl", "**/*.yml", "**/*.yml.tmpl"]
 exclude_files = ["**/pnpm-lock.yaml"]
 
 [validator.yamllint]
-include_files = ["**/*.yaml", "**/*.yml"]
+include_files = ["**/*.yaml", "**/*.yaml.tmpl", "**/*.yml", "**/*.yml.tmpl"]
 exclude_files = ["**/pnpm-lock.yaml"]
 
 [validator.case-conflict]

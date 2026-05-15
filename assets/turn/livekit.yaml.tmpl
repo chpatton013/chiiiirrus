@@ -6,22 +6,17 @@
 # reverse-proxy that terminates TLS on 443 and forwards to
 # 127.0.0.1:7880. Clients connect via `wss://livekit.<domain>`
 # (default port 443) -- the :7880 backend port stays internal.
-
 port: 7880
-
 bind_addresses:
   - "127.0.0.1"
-
 rtc:
   tcp_port: 7881
   udp_port: 7882
   use_external_ip: true
-
 keys:
   # `key: secret` pairs used to sign + verify the JWTs that
   # lk-jwt-service mints for Element-Call clients.
   "__LIVEKIT_API_KEY__": "__LIVEKIT_API_SECRET__"
-
 logging:
   level: info
   json: false

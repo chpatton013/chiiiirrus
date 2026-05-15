@@ -131,15 +131,15 @@ class ElementCallStack(Stack):
         version = _resolve_version(cfg.version)
         bundle_dir = _fetch_bundle(version, imports.assets.element_call_cache_path())
 
-        config_template = imports.assets.read_text("element-call", "config.json.tmpl")
-        substitutions = {
-            "MATRIX_FQDN": imports.matrix_fqdn,
-            "SERVER_NAME": foundation.public_domain,
-            "LK_JWT_FQDN": imports.lk_jwt_fqdn,
-        }
-        config = config_template
-        for key, value in substitutions.items():
-            config = config.replace(f"@@{key}@@", value)
+        config = imports.assets.render_template(
+            "element-call",
+            "config.json.tmpl",
+            substitutions={
+                "MATRIX_FQDN": imports.matrix_fqdn,
+                "SERVER_NAME": foundation.public_domain,
+                "LK_JWT_FQDN": imports.lk_jwt_fqdn,
+            },
+        )
         (bundle_dir / "config.json").write_text(config)
 
         bucket = s3.Bucket(

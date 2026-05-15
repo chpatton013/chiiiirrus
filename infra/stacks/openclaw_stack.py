@@ -278,36 +278,36 @@ class OpenClawStack(Stack):
             f'sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)" openclaw hooks enable {h}'
             for h in OPENCLAW_HOOKS
         )
-        user_data_template = imports.assets.read_text("openclaw", "user-data.sh.tmpl")
-        substitutions = {
-            "NODESOURCE_KEY_URI": NODESOURCE_KEY_URI,
-            "NODESOURCE_KEY_PATH": str(NODESOURCE_KEY_PATH),
-            "NODESOURCE_REPO_URI": NODESOURCE_REPO_URI,
-            "NODESOURCE_REPO_PATH": str(NODESOURCE_REPO_PATH),
-            "BUILD_DEPENDENCIES": " ".join(BUILD_DEPENDENCIES),
-            "EFS_UTILS_INSTALLER_URI": EFS_UTILS_INSTALLER_URI,
-            "EFS_MOUNTPOINT_DIR": str(EFS_MOUNTPOINT_DIR),
-            "EFS_FSTAB": efs_fstab,
-            "OPENCLAW_HOME_DIR": str(OPENCLAW_HOME_DIR),
-            "OPENCLAW_STATE_DIR": str(OPENCLAW_STATE_DIR),
-            "OPENCLAW_WORKSPACES_DIR": str(OPENCLAW_WORKSPACES_DIR),
-            "OPENCLAW_MAIN_WORKSPACE": str(OPENCLAW_WORKSPACES_DIR / "main"),
-            "OPENCLAW_HOOK_COMMANDS": hook_commands,
-            "HOMEBREW_INSTALLER_URI": HOMEBREW_INSTALLER_URI,
-            "PNPM_INSTALLER_URI": PNPM_INSTALLER_URI,
-            "PNPM_VERSION": PNPM_VERSION,
-            "MATRIX_BOT_INSTALL_DIR": str(MATRIX_BOT_INSTALL_DIR),
-            "MATRIX_BOT_DIR": str(MATRIX_BOT_DIR),
-            "BOT_ASSET_S3_URI": f"s3://{bot_asset.s3_bucket_name}/{bot_asset.s3_object_key}",
-            "HOMESERVER_URL": imports.matrix_homeserver_url,
-            "ALLOWED_SENDER": imports.allowed_sender,
-            "MATRIX_BOT_TOKEN_SECRET": MATRIX_BOT_TOKEN_SECRET,
-            "MATRIX_BOT_CONTROL_ROOM_PARAM": MATRIX_BOT_CONTROL_ROOM_PARAM,
-            "OPENCLAW_STATE_FILE": str(OPENCLAW_STATE_FILE),
-        }
-        rendered = user_data_template
-        for key, value in substitutions.items():
-            rendered = rendered.replace(f"@@{key}@@", value)
+        rendered = imports.assets.render_template(
+            "openclaw",
+            "user-data.sh.tmpl",
+            substitutions={
+                "NODESOURCE_KEY_URI": NODESOURCE_KEY_URI,
+                "NODESOURCE_KEY_PATH": str(NODESOURCE_KEY_PATH),
+                "NODESOURCE_REPO_URI": NODESOURCE_REPO_URI,
+                "NODESOURCE_REPO_PATH": str(NODESOURCE_REPO_PATH),
+                "BUILD_DEPENDENCIES": " ".join(BUILD_DEPENDENCIES),
+                "EFS_UTILS_INSTALLER_URI": EFS_UTILS_INSTALLER_URI,
+                "EFS_MOUNTPOINT_DIR": str(EFS_MOUNTPOINT_DIR),
+                "EFS_FSTAB": efs_fstab,
+                "OPENCLAW_HOME_DIR": str(OPENCLAW_HOME_DIR),
+                "OPENCLAW_STATE_DIR": str(OPENCLAW_STATE_DIR),
+                "OPENCLAW_WORKSPACES_DIR": str(OPENCLAW_WORKSPACES_DIR),
+                "OPENCLAW_MAIN_WORKSPACE": str(OPENCLAW_WORKSPACES_DIR / "main"),
+                "OPENCLAW_HOOK_COMMANDS": hook_commands,
+                "HOMEBREW_INSTALLER_URI": HOMEBREW_INSTALLER_URI,
+                "PNPM_INSTALLER_URI": PNPM_INSTALLER_URI,
+                "PNPM_VERSION": PNPM_VERSION,
+                "MATRIX_BOT_INSTALL_DIR": str(MATRIX_BOT_INSTALL_DIR),
+                "MATRIX_BOT_DIR": str(MATRIX_BOT_DIR),
+                "BOT_ASSET_S3_URI": f"s3://{bot_asset.s3_bucket_name}/{bot_asset.s3_object_key}",
+                "HOMESERVER_URL": imports.matrix_homeserver_url,
+                "ALLOWED_SENDER": imports.allowed_sender,
+                "MATRIX_BOT_TOKEN_SECRET": MATRIX_BOT_TOKEN_SECRET,
+                "MATRIX_BOT_CONTROL_ROOM_PARAM": MATRIX_BOT_CONTROL_ROOM_PARAM,
+                "OPENCLAW_STATE_FILE": str(OPENCLAW_STATE_FILE),
+            },
+        )
         user_data = ec2.UserData.custom(rendered)
 
         instance = ec2.Instance(

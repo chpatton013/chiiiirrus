@@ -1,7 +1,7 @@
 #!/bin/bash
 # user-data for the OpenClawStack EC2 instance.
 #
-# Template: openclaw_stack.py substitutes `@@KEY@@` placeholders with
+# Template: openclaw_stack.py substitutes `@@`-delimited placeholders with
 # CDK-side values (paths, asset URIs, CFN-token refs for the EFS id /
 # bot asset bucket / etc) before passing the rendered text to
 # `ec2.UserData.custom()`. Bash uses `$VAR` / `${VAR}`; we don't.
