@@ -120,6 +120,16 @@ experimental_features:
   msc3266_enabled: true
   msc3401_enabled: true
   msc4140_enabled: true
+
+# Make every local account searchable from the "Start chat" picker
+# even before they share a room with the searcher. Default
+# Synapse hides users until they're already in a shared room,
+# which makes onboarding fresh accounts painful. local sort
+# first so federated noise doesn't bury our own users.
+user_directory:
+  enabled: true
+  search_all_users: true
+  prefer_local_users: true
 EOF
 
 # 5. Minimal log config so Synapse logs to stdout (CloudWatch picks
