@@ -1,0 +1,30 @@
+<?php
+// Roundcube OAuth2 config rendered by assets/webmail_init/init.sh.
+// `${VAR}` placeholders are substituted by envsubst at task start
+// (only the named vars listed in `envsubst`'s allowlist are
+// touched; PHP's `$config[...]` and `$_SERVER[...]` references are
+// left intact).
+//
+// The first block fakes $_SERVER so Roundcube sees the request as
+// HTTPS even though Apache only speaks plain HTTP behind the
+// TLS-terminating ALB. Without it, Roundcube generates an
+// `http://...` redirect_uri for the OAuth flow, which Authentik
+// strict-matches against the registered `https://...` URL and
+// rejects with "missing, invalid, or mismatching redirection URI".
+if (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https') {
+    $_SERVER['HTTPS'] = 'on';
+    $_SERVER['SERVER_PORT'] = 443;
+}
+$config['oauth_provider'] = 'generic';
+$config['oauth_provider_name'] = 'Authentik';
+$config['oauth_client_id'] = '${OAUTH_CLIENT_ID}';
+$config['oauth_client_secret'] = '${OAUTH_CLIENT_SECRET}';
+$config['oauth_auth_uri'] = '${AUTHENTIK_ISSUER_BASE}/authorize/';
+$config['oauth_token_uri'] = '${AUTHENTIK_ISSUER_BASE}/token/';
+$config['oauth_identity_uri'] = '${AUTHENTIK_ISSUER_BASE}/userinfo/';
+$config['oauth_scope'] = 'openid profile email offline_access';
+$config['oauth_pkce'] = 'S256';
+$config['oauth_identity_fields'] = ['email'];
+$config['imap_auth_type'] = 'XOAUTH2';
+$config['smtp_auth_type'] = 'XOAUTH2';
+$config['login_autocomplete'] = 0;

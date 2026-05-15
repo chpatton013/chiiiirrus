@@ -13,13 +13,14 @@ FROM alpine:3.19
 
 ARG ROUNDCUBE_SOURCE_VERSION=1.6.10
 
-RUN apk add --no-cache ca-certificates curl jq sqlite \
+RUN apk add --no-cache ca-certificates curl gettext jq sqlite \
     && mkdir -p /usr/local/share/roundcube \
     && curl -fsSL \
        "https://raw.githubusercontent.com/roundcube/roundcubemail/${ROUNDCUBE_SOURCE_VERSION}/SQL/sqlite.initial.sql" \
        -o /usr/local/share/roundcube/sqlite.initial.sql
 
 COPY init.sh /usr/local/bin/init.sh
+COPY oauth.inc.php.tmpl /usr/local/share/roundcube/oauth.inc.php.tmpl
 RUN chmod +x /usr/local/bin/init.sh
 
 ENTRYPOINT []

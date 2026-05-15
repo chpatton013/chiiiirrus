@@ -273,6 +273,13 @@ class HeadscaleStack(Stack):
                 "HP_OIDC_NAME": "authentik/oidc/headplane",
                 "HP_HEADSCALE_URL": _headscale_url,
                 "HP_OIDC_ISSUER": headplane_oidc_issuer,
+                # The init shell does `python3 -c "$HP_CONFIG_INIT_PY"`
+                # so the python source can live in its own file
+                # (validated by pyright + black) without baking it
+                # into a docker image.
+                "HP_CONFIG_INIT_PY": imports.assets.read_text(
+                    "headscale", "headplane_config_init.py"
+                ),
             },
             stream_prefix="headplane-config-init",
         )

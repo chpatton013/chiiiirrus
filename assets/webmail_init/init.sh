@@ -49,36 +49,16 @@ else
   echo "schema present"
 fi
 
-# 2. Roundcube OAuth2 config. Single-quoted heredoc so PHP `$config`
-# references survive unmangled; values get inlined from the env vars
-# above before we write the file.
-#
-# The first PHP block fakes \$_SERVER so Roundcube sees the request
-# as HTTPS even though Apache only speaks plain HTTP behind the
-# TLS-terminating ALB. Without it, Roundcube generates an
-# `http://...` redirect_uri for the OAuth flow, which Authentik
-# strict-matches against the registered `https://...` URL and
-# rejects with "missing, invalid, or mismatching redirection URI".
-cat >"$ROUNDCUBE_DATA_DIR/config/oauth.inc.php" <<PHP
-<?php
-if ((\$_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https') {
-    \$_SERVER['HTTPS'] = 'on';
-    \$_SERVER['SERVER_PORT'] = 443;
-}
-\$config['oauth_provider'] = 'generic';
-\$config['oauth_provider_name'] = 'Authentik';
-\$config['oauth_client_id'] = '$OAUTH_CLIENT_ID';
-\$config['oauth_client_secret'] = '$OAUTH_CLIENT_SECRET';
-\$config['oauth_auth_uri'] = '$AUTHENTIK_ISSUER_BASE/authorize/';
-\$config['oauth_token_uri'] = '$AUTHENTIK_ISSUER_BASE/token/';
-\$config['oauth_identity_uri'] = '$AUTHENTIK_ISSUER_BASE/userinfo/';
-\$config['oauth_scope'] = 'openid profile email offline_access';
-\$config['oauth_pkce'] = 'S256';
-\$config['oauth_identity_fields'] = ['email'];
-\$config['imap_auth_type'] = 'XOAUTH2';
-\$config['smtp_auth_type'] = 'XOAUTH2';
-\$config['login_autocomplete'] = 0;
-PHP
+# 2. Roundcube OAuth2 config. The template lives at
+# /usr/local/share/roundcube/oauth.inc.php.tmpl (baked into the
+# image alongside the SQL schema). envsubst with an explicit
+# allowlist substitutes only the three env vars we care about;
+# PHP's own `$config[...]` and `$_SERVER[...]` references stay
+# intact because they're not in the list.
+# shellcheck disable=SC2016 # envsubst's allowlist syntax needs literal ${...}
+envsubst '${OAUTH_CLIENT_ID} ${OAUTH_CLIENT_SECRET} ${AUTHENTIK_ISSUER_BASE}' \
+  </usr/local/share/roundcube/oauth.inc.php.tmpl \
+  >"$ROUNDCUBE_DATA_DIR/config/oauth.inc.php"
 
 # Ownership + perms so the apache user (uid 33) in the main container
 # can read both files. The init container has no www-data; chown by
