@@ -11,10 +11,12 @@ the tag is `vX.Y.Z` but the tarball is `element-call-X.Y.Z.tar.gz`
 GitHub API returns.
 """
 
+import functools
 import json
 import pathlib
 import shutil
 import tarfile
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import cast
@@ -46,12 +48,14 @@ _ELEMENT_CALL_DOWNLOAD_BASE = (
 )
 
 
-def _resolve_version(version_spec: str) -> str:
+@functools.cache
+def _resolve_version(version_spec: str, cache_dir: pathlib.Path) -> str:
     """Return a concrete release tag (e.g. `v0.19.3`).
 
-    `"latest"` triggers a GitHub API lookup; anything else is
-    returned verbatim. Pinned versions never auto-update; the
-    "latest" mode re-resolves on every synth.
+    Same caching + fallback pattern as ElementWebStack: in-process
+    cache for repeated lookups, on-disk fallback when the API is
+    unreachable. See ElementWebStack._resolve_version for the
+    rationale.
     """
     if version_spec != "latest":
         return version_spec
@@ -59,8 +63,18 @@ def _resolve_version(version_spec: str) -> str:
         _ELEMENT_CALL_RELEASES_API,
         headers={"Accept": "application/vnd.github+json"},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.load(resp)["tag_name"]
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.load(resp)["tag_name"]
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        cached = sorted(p.name.removeprefix("dist-") for p in cache_dir.glob("dist-v*"))
+        if cached:
+            return cached[-1]
+        raise RuntimeError(
+            f"Element-Call latest-version lookup failed ({exc}) and no cached "
+            f"version is available in {cache_dir}; pin a version in config.toml "
+            "until the upstream API recovers."
+        ) from exc
 
 
 def _fetch_bundle(version: str, cache_dir: pathlib.Path) -> pathlib.Path:
@@ -128,8 +142,9 @@ class ElementCallStack(Stack):
         foundation = imports.foundation
         fqdn = f"{cfg.subdomain}.{foundation.public_domain}"
 
-        version = _resolve_version(cfg.version)
-        bundle_dir = _fetch_bundle(version, imports.assets.element_call_cache_path())
+        cache_dir = imports.assets.element_call_cache_path()
+        version = _resolve_version(cfg.version, cache_dir)
+        bundle_dir = _fetch_bundle(version, cache_dir)
 
         config = imports.assets.render_template(
             "element-call",

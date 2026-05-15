@@ -11,10 +11,12 @@ synth` runs don't re-download. The cache lives under
 `assets/element-web/cache/` (gitignored).
 """
 
+import functools
 import json
 import pathlib
 import shutil
 import tarfile
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import cast
@@ -44,14 +46,20 @@ _ELEMENT_RELEASES_API = (
 _ELEMENT_DOWNLOAD_BASE = "https://github.com/element-hq/element-web/releases/download"
 
 
-def _resolve_version(version_spec: str) -> str:
+@functools.cache
+def _resolve_version(version_spec: str, cache_dir: pathlib.Path) -> str:
     """Return a concrete release tag.
 
     `"latest"` triggers a GitHub API lookup; anything else is
-    returned verbatim. Pinned versions never auto-update; the
-    "latest" mode re-resolves on every synth, which is how
-    auto-updates land (a new release flips the CDK asset hash,
-    next deploy picks it up).
+    returned verbatim. Cached per-process so the test suite (or a
+    single synth that builds multiple stacks) doesn't burn through
+    the 60-req/hour unauthenticated GitHub limit.
+
+    Fallback: if the API call fails (rate-limited, network out)
+    AND a previously-resolved version is in `cache_dir`, reuse the
+    cached version. Lets `bin/test` keep running offline; the
+    deploy-time CI run is the place that genuinely needs a fresh
+    "latest" lookup.
     """
     if version_spec != "latest":
         return version_spec
@@ -59,8 +67,18 @@ def _resolve_version(version_spec: str) -> str:
         _ELEMENT_RELEASES_API,
         headers={"Accept": "application/vnd.github+json"},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.load(resp)["tag_name"]
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.load(resp)["tag_name"]
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        cached = sorted(p.name.removeprefix("dist-") for p in cache_dir.glob("dist-v*"))
+        if cached:
+            return cached[-1]
+        raise RuntimeError(
+            f"Element-Web latest-version lookup failed ({exc}) and no cached "
+            f"version is available in {cache_dir}; pin a version in config.toml "
+            "until the upstream API recovers."
+        ) from exc
 
 
 def _fetch_bundle(version: str, cache_dir: pathlib.Path) -> pathlib.Path:
@@ -131,8 +149,9 @@ class ElementWebStack(Stack):
         fqdn = f"{cfg.subdomain}.{foundation.public_domain}"
 
         # Fetch + materialize the Element bundle at synth time.
-        version = _resolve_version(cfg.version)
-        bundle_dir = _fetch_bundle(version, imports.assets.element_web_cache_path())
+        cache_dir = imports.assets.element_web_cache_path()
+        version = _resolve_version(cfg.version, cache_dir)
+        bundle_dir = _fetch_bundle(version, cache_dir)
 
         # Render config.json on top of the upstream bundle.
         config = imports.assets.render_template(

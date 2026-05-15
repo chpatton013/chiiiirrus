@@ -1,0 +1,96 @@
+# Synapse homeserver config rendered by assets/matrix/init.sh.
+# Placeholders are `${VAR}` -- substituted with os.path.expandvars
+# at init time. Synapse's own template syntax (`{{
+# user.preferred_username }}`) passes through verbatim; only `$VAR`
+# / `${VAR}` is interpolated.
+#
+# DB password and OIDC client_secret get inlined here at render
+# time from ECS-injected env vars. Synapse's database.args go
+# straight to psycopg2, which has no `password_path` knob, and
+# this file lives on an encrypted EFS access point restricted to
+# uid/gid 991 mode 750 -- so the exposure is equivalent to the
+# macaroon/form keys also stored here.
+server_name: "${SYNAPSE_SERVER_NAME}"
+public_baseurl: "${PUBLIC_BASEURL}"
+pid_file: /data/homeserver.pid
+listeners:
+  - port: ${SYNAPSE_PORT}
+    type: http
+    x_forwarded: true
+    bind_addresses: ["0.0.0.0"]
+    resources:
+      - names: [client, federation]
+        compress: false
+database:
+  name: psycopg2
+  args:
+    user: ${DB_USER}
+    password: "${DB_PASSWORD}"
+    host: ${DB_HOST}
+    port: ${DB_PORT}
+    database: ${DB_NAME}
+    sslmode: require
+    cp_min: 5
+    cp_max: 10
+log_config: /data/log.config
+media_store_path: /data/media_store
+signing_key_path: ${SIGNING_KEY}
+trusted_key_servers:
+  - server_name: matrix.org
+macaroon_secret_key: "${MACAROON_KEY}"
+form_secret: "${FORM_SECRET}"
+registration_shared_secret: "${REGISTRATION_SHARED_SECRET}"
+enable_registration: false
+enable_registration_without_verification: false
+serve_server_wellknown: false
+report_stats: false
+suppress_key_server_warning: true
+media_retention:
+  remote_media_lifetime: ${REMOTE_MEDIA_LIFETIME}
+oidc_providers:
+  - idp_id: authentik
+    idp_name: Authentik
+    issuer: "${OIDC_ISSUER}"
+    client_id: "${OIDC_CLIENT_ID}"
+    client_secret: "${OIDC_CLIENT_SECRET}"
+    scopes: [openid, profile, email]
+    user_mapping_provider:
+      config:
+        localpart_template: "{{ user.preferred_username }}"
+        display_name_template: "{{ user.name }}"
+        email_template: "{{ user.email }}"
+# Allow the self-hosted Element-Web and Element-Call clients to
+# be valid post-SSO redirect targets. Synapse defaults to refusing
+# any redirect URL not on this list. Pattern is prefix-match,
+# not regex.
+sso:
+  client_whitelist:
+    - "${ELEMENT_WEB_BASE_URL}"
+    - "${ELEMENT_CALL_BASE_URL}"
+# coturn integration. Synapse signs short-lived (username,
+# password) pairs using the shared secret and hands them to
+# clients via /voip/turnServer; coturn validates with the same
+# secret. matrix_stack.py pre-renders TURN_URIS_JSON as a JSON
+# array; YAML accepts inline JSON, so the field stays valid YAML
+# before substitution as well.
+turn_uris: ${TURN_URIS_JSON}
+turn_shared_secret: "${TURN_SHARED_SECRET}"
+turn_user_lifetime: ${TURN_USER_LIFETIME_MS}
+turn_allow_guests: false
+# MSCs required for the modern Element-Call (group voice/video
+# via LiveKit SFU). MSC3266 powers the room-summary API the call
+# UI uses; MSC3401 carries group-call signaling in room state;
+# MSC4140 is delayed events for call invites.
+experimental_features:
+  msc3266_enabled: true
+  msc3401_enabled: true
+  msc4140_enabled: true
+# Make every local account searchable from the "Start chat" picker
+# even before they share a room with the searcher. Default
+# Synapse hides users until they're already in a shared room,
+# which makes onboarding fresh accounts painful. Local sort first
+# so federated noise doesn't bury our own users.
+user_directory:
+  enabled: true
+  search_all_users: true
+  prefer_local_users: true

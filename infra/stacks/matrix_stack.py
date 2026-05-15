@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from typing import cast
 
@@ -89,6 +90,13 @@ class MatrixStack(Stack):
 
         init_script = imports.assets.read_text("matrix", "init.sh")
         bootstrap_script = imports.assets.read_text("matrix", "bootstrap.sh")
+        # Templates init.sh writes via os.path.expandvars at task
+        # start. Kept as separate files in `assets/matrix/` so the
+        # yamllint validator runs against them.
+        homeserver_yaml_tmpl = imports.assets.read_text(
+            "matrix", "homeserver.yaml.tmpl"
+        )
+        log_config_yaml = imports.assets.read_text("matrix", "log.config.yaml")
 
         # Matrix `server_name` is the apex; the listener lives at
         # matrix.<public_domain>. .well-known delegation in
@@ -165,10 +173,12 @@ class MatrixStack(Stack):
         # Service: one Fargate task with init + main containers
         # sharing /data via EFS.
 
-        # Pre-render the homeserver.yaml `turn_uris:` block so the
-        # init container just inlines the env var as-is. Keeps the
-        # init.sh template free of list-rendering logic.
-        turn_uris_yaml = "\n".join(f'  - "{uri}"' for uri in imports.turn_uris)
+        # Pre-render turn_uris as inline JSON; YAML accepts a JSON
+        # array as a value, so the homeserver.yaml.tmpl stays valid
+        # YAML pre-substitution. Synapse's turn_user_lifetime field
+        # is milliseconds.
+        turn_uris_json = json.dumps(imports.turn_uris)
+        turn_user_lifetime_ms = str(imports.turn_user_lifetime_seconds * 1000)
 
         common_environment = {
             "SYNAPSE_SERVER_NAME": server_name,
@@ -181,13 +191,20 @@ class MatrixStack(Stack):
             "REMOTE_MEDIA_LIFETIME": cfg.remote_media_lifetime,
             "ELEMENT_WEB_BASE_URL": imports.element_web_base_url,
             "ELEMENT_CALL_BASE_URL": imports.element_call_base_url,
-            "TURN_URIS_YAML": turn_uris_yaml,
-            "TURN_USER_LIFETIME_SECONDS": str(imports.turn_user_lifetime_seconds),
+            "TURN_URIS_JSON": turn_uris_json,
+            "TURN_USER_LIFETIME_MS": turn_user_lifetime_ms,
         }
         # Init container env additions only it needs: DB_USER plain,
-        # DB_PASSWORD and OIDC_CLIENT_ID/SECRET as ECS secrets.
+        # DB_PASSWORD and OIDC_CLIENT_ID/SECRET as ECS secrets. The
+        # two `*_TMPL` / `*_YAML` env vars carry the homeserver.yaml +
+        # log.config templates verbatim so init.sh can expand them
+        # with python3 -- shipping the files this way (instead of
+        # baking them into the image) keeps them in the repo where
+        # yamllint can see them.
         init_environment = {
             **common_environment,
+            "HOMESERVER_YAML_TMPL": homeserver_yaml_tmpl,
+            "LOG_CONFIG_YAML": log_config_yaml,
         }
         init_secrets = {
             "DB_USER": ecs.Secret.from_secrets_manager(db_secret, "username"),
