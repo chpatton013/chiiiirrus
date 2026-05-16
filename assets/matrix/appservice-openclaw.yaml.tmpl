@@ -1,0 +1,40 @@
+# Synapse application-service registration for openclaw. Rendered
+# by assets/matrix/init.sh into /data/appservice-openclaw.yaml and
+# referenced from homeserver.yaml's `app_service_config_files`.
+# Placeholders are `${VAR}` -- substituted with os.path.expandvars
+# at init time, same pattern homeserver.yaml.tmpl uses.
+id: openclaw
+# HTTP endpoint Synapse pushes events to (PUT /_matrix/app/v1/...).
+# Phase A: this URL is not yet reachable -- Synapse will load the
+# registration but transactions will fail until OpenClawStack
+# stands up the AS server + public ALB in Phase B.
+url: "${APPSERVICE_URL}"
+# AS authenticates AS-as-user requests with as_token. The AS
+# verifies inbound transactions match hs_token. Both are CDK
+# auto-generated random strings stored in Secrets Manager; the
+# init container reads them as ECS secrets and substitutes here.
+as_token: "${APPSERVICE_AS_TOKEN}"
+hs_token: "${APPSERVICE_HS_TOKEN}"
+# The MXID localpart Synapse uses when the AS speaks as itself
+# (no `?user_id=` query). Conventionally `<id>` -- separate from
+# the namespace ghost users.
+sender_localpart: openclaw
+namespaces:
+  users:
+    # exclusive: true reserves the namespace; only this AS can
+    # create users matching the regex. The `_id_` prefix is the
+    # Matrix-spec convention for AS-puppeted ghost users.
+    - exclusive: true
+      regex: "@_openclaw_.*:${SYNAPSE_SERVER_NAME}"
+  rooms: []
+  aliases:
+    - exclusive: false
+      regex: "#openclaw-.*:${SYNAPSE_SERVER_NAME}"
+# Rate-limiting bypass for AS traffic. AS transactions arrive in
+# batches and Synapse's per-user rate limit would otherwise drop
+# ghost activity.
+rate_limited: false
+# Disable optional MSCs we don't use. ephemeral events
+# (typing/read receipts) would just be noise for an AS routing
+# to a subprocess.
+de.sorunome.msc2409.push_ephemeral: false

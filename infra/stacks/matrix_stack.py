@@ -71,6 +71,10 @@ class MatrixImports:
     turn_shared_secret: secretsmanager.ISecret
     turn_uris: list[str]
     turn_user_lifetime_seconds: int
+    # URL where Synapse should POST appservice transactions for
+    # openclaw. Provisioned by OpenClawStack in Phase B; until
+    # then this is just baked into the registration YAML.
+    openclaw_appservice_url: str
 
 
 class MatrixStack(Stack):
@@ -97,6 +101,9 @@ class MatrixStack(Stack):
             "matrix", "homeserver.yaml.tmpl"
         )
         log_config_yaml = imports.assets.read_text("matrix", "log.config.yaml")
+        appservice_openclaw_tmpl = imports.assets.read_text(
+            "matrix", "appservice-openclaw.yaml.tmpl"
+        )
 
         # Matrix `server_name` is the apex; the listener lives at
         # matrix.<public_domain>. .well-known delegation in
@@ -113,6 +120,32 @@ class MatrixStack(Stack):
         )
         oidc_secret = secretsmanager.Secret.from_secret_name_v2(
             self, "OidcSecret", "authentik/oidc/matrix"
+        )
+
+        # Application-service registration for openclaw. Two random
+        # bearer tokens shared between Synapse and the openclaw AS
+        # server: as_token authenticates AS-originated requests TO
+        # Synapse, hs_token authenticates Synapse's transactions TO
+        # the AS. CDK auto-generates both at first deploy; rotating
+        # means deleting the secret and redeploying both stacks.
+        def _random_token(construct_id: str, secret_name: str) -> secretsmanager.Secret:
+            return secretsmanager.Secret(
+                self,
+                construct_id,
+                secret_name=secret_name,
+                generate_secret_string=secretsmanager.SecretStringGenerator(
+                    secret_string_template="{}",
+                    generate_string_key="secret",
+                    password_length=64,
+                    exclude_punctuation=True,
+                ),
+            )
+
+        appservice_as_token_secret = _random_token(
+            "AppserviceAsToken", "matrix/openclaw-appservice-as-token"
+        )
+        appservice_hs_token_secret = _random_token(
+            "AppserviceHsToken", "matrix/openclaw-appservice-hs-token"
         )
 
         ###
@@ -177,6 +210,8 @@ class MatrixStack(Stack):
             **common_environment,
             "HOMESERVER_YAML_TMPL": homeserver_yaml_tmpl,
             "LOG_CONFIG_YAML": log_config_yaml,
+            "APPSERVICE_OPENCLAW_TMPL": appservice_openclaw_tmpl,
+            "APPSERVICE_URL": imports.openclaw_appservice_url,
         }
         init_secrets = {
             "DB_USER": ecs.Secret.from_secrets_manager(db_secret, "username"),
@@ -187,6 +222,12 @@ class MatrixStack(Stack):
             ),
             "TURN_SHARED_SECRET": ecs.Secret.from_secrets_manager(
                 imports.turn_shared_secret, "secret"
+            ),
+            "APPSERVICE_AS_TOKEN": ecs.Secret.from_secrets_manager(
+                cast(secretsmanager.ISecret, appservice_as_token_secret), "secret"
+            ),
+            "APPSERVICE_HS_TOKEN": ecs.Secret.from_secrets_manager(
+                cast(secretsmanager.ISecret, appservice_hs_token_secret), "secret"
             ),
         }
 

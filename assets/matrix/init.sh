@@ -40,4 +40,16 @@ sys.stdout.write(os.path.expandvars(sys.stdin.read()))
 #    write the env-var content straight to disk.
 printf '%s' "${LOG_CONFIG_YAML}" >"${DATA}/log.config"
 
-echo "matrix-init: homeserver.yaml rendered for ${SERVER_NAME}"
+# 5. Application-service registration for openclaw. Same shape as
+#    homeserver.yaml: env-var-borne template, expanded with
+#    python3 expandvars. APPSERVICE_AS_TOKEN / APPSERVICE_HS_TOKEN
+#    come in as ECS secrets so they don't appear in any task-def
+#    plaintext. homeserver.yaml.tmpl references this path via
+#    app_service_config_files.
+python3 -c '
+import os, sys
+sys.stdout.write(os.path.expandvars(sys.stdin.read()))
+' <<<"${APPSERVICE_OPENCLAW_TMPL}" >"${DATA}/appservice-openclaw.yaml"
+chmod 0600 "${DATA}/appservice-openclaw.yaml"
+
+echo "matrix-init: homeserver.yaml + appservice-openclaw.yaml rendered for ${SERVER_NAME}"

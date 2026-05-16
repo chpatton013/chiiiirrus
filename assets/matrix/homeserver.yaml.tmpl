@@ -94,3 +94,11 @@ user_directory:
   enabled: true
   search_all_users: true
   prefer_local_users: true
+# Application-service registrations. init.sh writes the openclaw
+# AS config to /data alongside homeserver.yaml; Synapse loads it
+# at startup and starts pushing transactions to the configured
+# url. Until OpenClawStack stands up the AS server in Phase B,
+# transactions will fail and retry with backoff (visible in
+# Synapse logs but harmless).
+app_service_config_files:
+  - /data/appservice-openclaw.yaml
