@@ -200,3 +200,20 @@ min_healthy_percent = 0
 # regresses.
 subdomain = "call"
 version = "latest"
+
+[synapse_admin]
+# Self-hosted Matrix homeserver admin UI at
+# matrix-admin.<public_domain>. Upstream is `etkecc/ketesa`
+# (formerly `etkecc/synapse-admin`); same software, new name.
+# Static React SPA served by a tiny Fargate nginx behind a
+# public ALB; ALB's `authenticate_oidc` action gates URL access
+# behind the `synapse-admin` Authentik group. Logging in
+# additionally requires a Synapse `admin=1` user.
+subdomain = "matrix-admin"
+version = "v1.2.1"
+
+[synapse_admin.task]
+cpu = 256
+memory_limit_mib = 512
+desired_count = 1
+min_healthy_percent = 0

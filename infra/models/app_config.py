@@ -13,6 +13,7 @@ from .headscale_config import HeadscaleConfig
 from .lk_jwt_config import LkJwtConfig
 from .mail_config import MailConfig
 from .matrix_config import MatrixConfig
+from .synapse_admin_config import SynapseAdminConfig
 from .turn_config import TurnConfig
 from .vaultwarden_config import VaultwardenConfig
 from .webfinger_config import WebFingerConfig
@@ -35,6 +36,7 @@ class AppConfig:
     turn: TurnConfig
     lk_jwt: LkJwtConfig
     element_call: ElementCallConfig
+    synapse_admin: SynapseAdminConfig
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
@@ -53,6 +55,7 @@ class AppConfig:
             turn=TurnConfig.load(data["turn"]),
             lk_jwt=LkJwtConfig.load(data["lk_jwt"]),
             element_call=ElementCallConfig.load(data["element_call"]),
+            synapse_admin=SynapseAdminConfig.load(data["synapse_admin"]),
         )
 
 

@@ -23,6 +23,7 @@ from .stacks.lk_jwt_stack import LkJwtImports, LkJwtStack
 from .stacks.mail_stack import MailImports, MailStack
 from .stacks.matrix_stack import MatrixImports, MatrixStack
 from .stacks.openclaw_stack import OpenClawImports, OpenClawStack
+from .stacks.synapse_admin_stack import SynapseAdminImports, SynapseAdminStack
 from .stacks.turn_stack import TurnImports, TurnStack
 from .stacks.vaultwarden_stack import VaultwardenImports, VaultwardenStack
 from .stacks.webfinger_stack import WebFingerImports, WebFingerStack
@@ -53,6 +54,9 @@ def build_app(
     roundcube_redirect_uri = f"https://{roundcube_fqdn}/index.php/login/oauth"
     matrix_fqdn = f"{cfg.matrix.subdomain}.{cfg.foundation.public_domain}"
     matrix_redirect_uri = f"https://{matrix_fqdn}/_synapse/client/oidc/callback"
+    synapse_admin_fqdn = f"{cfg.synapse_admin.subdomain}.{cfg.foundation.public_domain}"
+    # ALB's `authenticate_oidc` action posts the callback here.
+    synapse_admin_redirect_uri = f"https://{synapse_admin_fqdn}/oauth2/idpresponse"
     element_web_fqdn = f"{cfg.element_web.subdomain}.{cfg.foundation.public_domain}"
     element_web_base_url = f"https://{element_web_fqdn}/"
     lk_jwt_fqdn = f"{cfg.lk_jwt.subdomain}.{cfg.foundation.public_domain}"
@@ -107,6 +111,7 @@ def build_app(
             rspamd_redirect_uri=rspamd_redirect_uri,
             roundcube_redirect_uri=roundcube_redirect_uri,
             matrix_redirect_uri=matrix_redirect_uri,
+            synapse_admin_redirect_uri=synapse_admin_redirect_uri,
         ),
         env=env,
     )
@@ -302,6 +307,18 @@ def build_app(
         imports=OpenClawImports(
             foundation=foundation,
             assets=assets,
+        ),
+        env=env,
+    )
+    SynapseAdminStack(
+        app,
+        "SynapseAdminStack",
+        imports=SynapseAdminImports(
+            cfg=cfg.synapse_admin,
+            foundation=foundation,
+            assets=assets,
+            matrix_fqdn=matrix_fqdn,
+            authentik_issuer_base=authentik_issuer_base,
         ),
         env=env,
     )

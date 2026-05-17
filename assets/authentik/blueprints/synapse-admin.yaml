@@ -1,0 +1,42 @@
+version: 1
+metadata:
+  name: Synapse Admin OIDC application
+entries:
+  - model: authentik_core.group
+    identifiers:
+      name: synapse-admin
+    attrs:
+      users:
+        - !Find [authentik_core.user, [username, !Env AK_BP_USER_USERNAME]]
+  - model: authentik_providers_oauth2.oauth2provider
+    id: synapse-admin-provider
+    identifiers:
+      name: synapse-admin
+    attrs:
+      client_type: confidential
+      client_id: !Env AK_BP_SYNAPSE_ADMIN_CLIENT_ID
+      client_secret: !Env AK_BP_SYNAPSE_ADMIN_CLIENT_SECRET
+      redirect_uris:
+        - matching_mode: strict
+          url: !Env AK_BP_SYNAPSE_ADMIN_REDIRECT_URI
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+  - model: authentik_core.application
+    identifiers:
+      slug: synapse-admin
+    attrs:
+      name: Synapse Admin
+      provider: !KeyOf synapse-admin-provider
+      policy_engine_mode: any
+      open_in_new_tab: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !Find [authentik_core.application, [slug, synapse-admin]]
+      group: !Find [authentik_core.group, [name, synapse-admin]]
+    attrs:
+      order: 0
