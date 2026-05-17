@@ -6,11 +6,10 @@ ECS-exec's into the running Synapse Fargate task (which has
 creates the user with a random password, then logs in to obtain
 an access token. Prints the credentials as JSON to stdout.
 
-Intended for one-shot operator use -- e.g. creating
-@openclaw-wadsworth, @openclaw-sebastian, @openclaw-binx so the
-tokens can be pasted into the openclaw matrix-channel wizard.
-The script does NOT persist tokens to Secrets Manager; that's the
-operator's responsibility.
+Intended for one-shot operator use -- e.g. creating users for bot
+accounts so the tokens can be pasted into the openclaw matrix-channel
+wizard. The script does NOT persist tokens to Secrets Manager; that's
+the operator's responsibility.
 
 Idempotency: re-running with the same username fails at the
 register step (Synapse returns "User ID already taken"). If you
@@ -20,6 +19,7 @@ use Synapse's admin API instead.
 
 import argparse
 import json
+import pathlib
 import re
 import shlex
 import subprocess
@@ -38,30 +38,9 @@ SENTINEL = "MATRIX_USER_JSON:"
 
 USERNAME_RE = re.compile(r"^[a-z0-9._=\-/+]+$")
 
-
-# Runs inside the synapse container. Receives username as $1
-# and the admin flag (--admin / --no-admin) as $2. Talks to
-# Synapse on http://127.0.0.1:8008 -- the main container doesn't
-# have $HOMESERVER_URL in its env (that's only on the one-shot
-# bootstrap task), and going out through the public ALB would
-# bounce back into this same container anyway. Logs the
-# register step to stderr; emits one stdout line:
-#   MATRIX_USER_JSON: {"token": "...", "user_id": "...", "device_id": "..."}
-IN_CONTAINER_SCRIPT = r"""
-set -euo pipefail
-USER=$1
-ADMIN_FLAG=$2
-URL=http://127.0.0.1:8008
-PASS=$(head -c 32 /dev/urandom | base64 | tr -d '\n=+/')
-python -m synapse._scripts.register_new_matrix_user \
-  -c /data/homeserver.yaml \
-  -u "$USER" -p "$PASS" "$ADMIN_FLAG" \
-  "$URL" >&2
-RESP=$(curl -fsS -X POST "$URL/_matrix/client/v3/login" \
-  -H 'Content-Type: application/json' \
-  -d "{\"type\":\"m.login.password\",\"user\":\"$USER\",\"password\":\"$PASS\",\"initial_device_display_name\":\"$USER\"}")
-echo "MATRIX_USER_JSON: $(echo "$RESP" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(json.dumps({"token": r["access_token"], "user_id": r["user_id"], "device_id": r.get("device_id", "")}))')"
-"""
+# Body shipped via `aws ecs execute-command --command "bash -c ..."`.
+# Kept as a sibling .sh file so shellcheck + shfmt see it.
+IN_CONTAINER_SCRIPT = (pathlib.Path(__file__).parent / "register_user.sh").read_text()
 
 
 def _service_arn(cfn) -> str:
@@ -117,7 +96,7 @@ def main() -> int:
     )
     parser.add_argument(
         "username",
-        help="Matrix localpart (lowercase), e.g. 'openclaw-wadsworth'",
+        help="Matrix localpart (lowercase)",
     )
     parser.add_argument(
         "--admin",

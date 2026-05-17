@@ -11,6 +11,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from ..constructs.node_exec_tags import tag_for_node_exec
 from ..constructs.shared_efs_volume import EfsAccessPointSpec, SharedEfsVolume
 from ..constructs.standard_backup_plan import StandardBackupPlan
 from ..models.asset_loader import AssetLoader
@@ -28,39 +29,6 @@ OPENCLAW_ROOT_DIR = EFS_MOUNTPOINT_DIR / "openclaw"
 OPENCLAW_HOME_DIR = OPENCLAW_ROOT_DIR / "home"
 OPENCLAW_STATE_DIR = OPENCLAW_ROOT_DIR / "state"
 OPENCLAW_WORKSPACES_DIR = OPENCLAW_ROOT_DIR / "workspaces"
-NODESOURCE_KEY_URI = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
-NODESOURCE_REPO_URI = "https://deb.nodesource.com/node_24.x"
-NODESOURCE_KEY_PATH = pathlib.Path("/etc/apt/keyrings/nodesource.gpg")
-NODESOURCE_REPO_PATH = pathlib.Path("/etc/apt/sources.list.d/nodesource.list")
-EFS_UTILS_INSTALLER_URI = "https://amazon-efs-utils.aws.com/efs-utils-installer.sh"
-HOMEBREW_INSTALLER_URI = (
-    "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
-)
-PNPM_INSTALLER_URI = "https://get.pnpm.io/install.sh"
-# Pin pnpm. v11 changed install behavior such that
-# `@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js` (which we
-# run by hand after `pnpm install --ignore-scripts`) can no longer
-# resolve its `https-proxy-agent` transitive dep, breaking user-data
-# build on every fresh instance.
-PNPM_VERSION = "10.18.3"
-BUILD_DEPENDENCIES = [
-    "build-essential",
-    "curl",
-    "ca-certificates",
-    "gcc",
-    "git",
-    "gnupg",
-    "jq",
-    "nfs-common",
-    "nodejs",
-    "openjdk-21-jre-headless",
-    "trash-cli",
-]
-OPENCLAW_HOOKS = [
-    "boot-md",
-    "command-logger",
-    "session-memory",
-]
 
 
 def parse_bool(s: str) -> bool:
@@ -180,30 +148,16 @@ class OpenClawStack(Stack):
             os=ec2.OperatingSystemType.LINUX,
         )
 
-        hook_commands = "\n".join(
-            f'sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)" openclaw hooks enable {h}'
-            for h in OPENCLAW_HOOKS
-        )
         rendered = imports.assets.render_template(
             "openclaw",
             "user-data.sh.tmpl",
             substitutions={
-                "NODESOURCE_KEY_URI": NODESOURCE_KEY_URI,
-                "NODESOURCE_KEY_PATH": str(NODESOURCE_KEY_PATH),
-                "NODESOURCE_REPO_URI": NODESOURCE_REPO_URI,
-                "NODESOURCE_REPO_PATH": str(NODESOURCE_REPO_PATH),
-                "BUILD_DEPENDENCIES": " ".join(BUILD_DEPENDENCIES),
-                "EFS_UTILS_INSTALLER_URI": EFS_UTILS_INSTALLER_URI,
                 "EFS_MOUNTPOINT_DIR": str(EFS_MOUNTPOINT_DIR),
                 "EFS_FSTAB": efs_fstab,
                 "OPENCLAW_HOME_DIR": str(OPENCLAW_HOME_DIR),
                 "OPENCLAW_STATE_DIR": str(OPENCLAW_STATE_DIR),
                 "OPENCLAW_WORKSPACES_DIR": str(OPENCLAW_WORKSPACES_DIR),
                 "OPENCLAW_MAIN_WORKSPACE": str(OPENCLAW_WORKSPACES_DIR / "main"),
-                "OPENCLAW_HOOK_COMMANDS": hook_commands,
-                "HOMEBREW_INSTALLER_URI": HOMEBREW_INSTALLER_URI,
-                "PNPM_INSTALLER_URI": PNPM_INSTALLER_URI,
-                "PNPM_VERSION": PNPM_VERSION,
             },
         )
         user_data = ec2.UserData.custom(rendered)
@@ -244,20 +198,5 @@ class OpenClawStack(Stack):
             resources=[backup.BackupResource.from_efs_file_system(filesystem)],
         )
 
-        CfnOutput(self, "InstanceId", value=instance.instance_id)
-        CfnOutput(self, "InstancePublicIp", value=instance.instance_public_ip)
-        CfnOutput(self, "EfsId", value=filesystem.file_system_id)
-        CfnOutput(
-            self,
-            "SsmSessionExample",
-            value=f"aws ssm start-session --target {instance.instance_id}",
-        )
-        CfnOutput(
-            self,
-            "SsmPortForwardExample",
-            value=(
-                f"aws ssm start-session --target {instance.instance_id} "
-                "--document-name AWS-StartPortForwardingSession "
-                '--parameters \'{"portNumber":["18789"],"localPortNumber":["18789"]}\''
-            ),
-        )
+        # Discoverable by bin/node-* helpers (info/shell/exec/portforward).
+        tag_for_node_exec(instance, label="openclaw")

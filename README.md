@@ -140,17 +140,42 @@ manual step is the Tailscale SaaS-side registration.
       becomes `@<authentik.user.username>:<public_domain>`.
 - OpenClaw agent accounts (`OpenClawStack`)
     - The openclaw daemon ships a first-class Matrix channel with
-      multi-account support + native E2EE. Onboard one bot account
-      per agent: SSM into the EC2 instance, run `openclaw doctor`
-      and follow the wizard's `channels.matrix.accounts` flow.
-    - For each agent, mint a Matrix user + access token with the
-      helper:
-      ```sh
-      bin/matrix-register-user openclaw-<agent>
-      ```
-      Paste the resulting token into the wizard prompt; tokens
-      live in `~/.openclaw/openclaw.json` on the EFS-backed state
-      dir so they persist across instance replacements.
+      multi-account support + native E2EE. Each agent gets its
+      own Matrix identity (`@openclaw-<agent>:<public_domain>`) —
+      no shared bot account, no appservice in front of Synapse.
+    - **Naming conventions:**
+        - MXID localpart: `openclaw-<agent>` (lowercase, matches
+          the Matrix-localpart character set).
+        - openclaw-side account key (what becomes the
+          `channels.matrix.accounts.<name>` key in
+          `/data/openclaw/state/openclaw.json`): the bare agent
+          slug, e.g. `<agent>` — not `openclaw-<agent>`.
+    - **Onboarding a new agent** (one-time per agent; account
+      state lives on EFS so it survives instance replacements):
+        1. Mint a Matrix user + access token from your operator
+           machine:
+           ```sh
+           bin/matrix-register-user openclaw-<agent>
+           ```
+        2. SSM into the OpenClaw EC2 instance and run
+           `openclaw configure`. In the matrix-channel section of
+           the wizard, add an account under the agent slug and
+           paste the access token. The wizard will also prompt
+           for a device display name — set it to something
+           agent-specific so Element's session list distinguishes
+           the three.
+        3. Set `dm.policy: "allowlist"` with your MXID in
+           `allowFrom`, and `autoJoin: dm` (or whatever value
+           openclaw's docs name for "accept DM invites from
+           allowlist"). Without that, the agent will register +
+           sync but never accept the room invites you send from
+           Element, and DMs will sit unrouted.
+    - **Federation note:** Synapse's federation is open by
+      default, so each agent MXID is reachable from any
+      federating Matrix server. The `dm.policy: "allowlist"`
+      check on each account is what keeps a stray off-server DM
+      from getting handled — verify it's in place before
+      considering an agent "ready."
 
 ## Operations
 
@@ -735,3 +760,6 @@ DAG. But they can never declare a cyclical dependency.
 TODO:
 - Monitoring stack
 - Auto-scale-down
+- Claw
+  - tailscale config
+  - userdata audit

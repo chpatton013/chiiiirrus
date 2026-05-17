@@ -1,0 +1,16 @@
+#!/bin/bash --norc
+set -euo pipefail
+source="${BASH_SOURCE[0]}"
+while [ -L "$source" ]; do
+  dir="$(cd -P "$(dirname "$source")" && pwd)"
+  source="$(readlink "$source")"
+  [[ $source != /* ]] && source="$dir/$source"
+done
+here="$(cd -P "$(dirname "$source")" && pwd)"
+repo_root="$(dirname "$here")"
+# Resolve `aws` (used internally for `ssm start-session`) to this
+# repo's pinned wrapper rather than whatever's on PATH.
+export PATH="$here:$PATH"
+exec "$here/uv" run \
+  --with-requirements "$repo_root/scripts/aws/node/requirements.txt" \
+  "$repo_root/scripts/aws/node/shell.py" "$@"

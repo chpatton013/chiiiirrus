@@ -14,19 +14,44 @@ set -euxo pipefail
 trap 'echo USERDATA FAILED on line $LINENO' ERR
 export DEBIAN_FRONTEND=noninteractive
 
+NODESOURCE_KEY_URI="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
+NODESOURCE_REPO_URI="https://deb.nodesource.com/node_24.x"
+NODESOURCE_KEY_PATH="/etc/apt/keyrings/nodesource.gpg"
+NODESOURCE_REPO_PATH="/etc/apt/sources.list.d/nodesource.list"
+EFS_UTILS_INSTALLER_URI="https://amazon-efs-utils.aws.com/efs-utils-installer.sh"
+HOMEBREW_INSTALLER_URI="https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+PNPM_INSTALLER_URI="https://get.pnpm.io/install.sh"
+# Pin pnpm. v11 changed install behavior such that
+# `@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js` (which we
+# run by hand after `pnpm install --ignore-scripts`) can no longer
+# resolve its `https-proxy-agent` transitive dep, breaking user-data
+# build on every fresh instance.
+PNPM_VERSION="10.18.3"
+
 # Nodesource apt repo so we install a current Node.
 install -d -m 0755 /etc/apt/keyrings
-curl -fsSL '@@NODESOURCE_KEY_URI@@' | gpg --dearmor -o '@@NODESOURCE_KEY_PATH@@'
-echo "deb [signed-by=@@NODESOURCE_KEY_PATH@@] @@NODESOURCE_REPO_URI@@ nodistro main" >'@@NODESOURCE_REPO_PATH@@'
+curl -fsSL "$NODESOURCE_KEY_URI" | gpg --dearmor -o "$NODESOURCE_KEY_PATH"
+echo "deb [signed-by=$NODESOURCE_KEY_PATH] $NODESOURCE_REPO_URI nodistro main" >"$NODESOURCE_REPO_PATH"
 apt-get update
-apt-get install -y @@BUILD_DEPENDENCIES@@
+apt-get install -y \
+  build-essential \
+  curl \
+  ca-certificates \
+  gcc \
+  git \
+  gnupg \
+  jq \
+  nfs-common \
+  nodejs \
+  openjdk-21-jre-headless \
+  trash-cli
 
 # Enable service lingering so the openclaw + matrix-bot user units
 # can run without a login shell.
 loginctl enable-linger ubuntu
 
 # Mount EFS at the well-known mountpoint.
-curl -fsSL '@@EFS_UTILS_INSTALLER_URI@@' | sh -s -- --install
+curl -fsSL "$EFS_UTILS_INSTALLER_URI" | sh -s -- --install
 mkdir -p '@@EFS_MOUNTPOINT_DIR@@'
 echo "@@EFS_FSTAB@@" >>/etc/fstab
 mount -a
@@ -48,13 +73,14 @@ chmod 0644 /etc/profile.d/openclaw.sh
 id ssm-user >/dev/null 2>&1 || useradd -m -s /bin/bash ssm-user
 install -d -m 0755 /etc/sudoers.d
 echo "ssm-user ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/ssm-user
-curl -fsSL '@@HOMEBREW_INSTALLER_URI@@' | sudo -iu ssm-user /bin/bash
+curl -fsSL "$HOMEBREW_INSTALLER_URI" | sudo -iu ssm-user /bin/bash
 sudo -u ssm-user /home/linuxbrew/.linuxbrew/bin/brew shellenv | tee /etc/profile.d/homebrew.sh >/dev/null
 chmod 0644 /etc/profile.d/homebrew.sh
 
 # Install pnpm at a pinned version (see openclaw_stack.PNPM_VERSION
 # for why; v11 broke the matrix-sdk-crypto-nodejs install path).
-curl -fsSL '@@PNPM_INSTALLER_URI@@' | sudo -iu ubuntu env PNPM_VERSION='@@PNPM_VERSION@@' /bin/bash
+export PNPM_VERSION
+curl -fsSL "$PNPM_INSTALLER_URI" | sudo -iu ubuntu /bin/bash
 
 # Onboard openclaw + enable hooks. `sudo -i` + XDG_RUNTIME_DIR
 # together let systemctl manage user units without a login cycle.
@@ -67,4 +93,9 @@ sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)" \
   --workspace '@@OPENCLAW_MAIN_WORKSPACE@@' \
   --auth-choice skip --skip-channels --skip-search --skip-skills \
   --json
-@@OPENCLAW_HOOK_COMMANDS@@
+sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)" \
+  openclaw hooks enable boot-md
+sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)" \
+  openclaw hooks enable command-logger
+sudo -iu ubuntu XDG_RUNTIME_DIR="/run/user/$(id -u ubuntu)" \
+  openclaw hooks enable session-memory
